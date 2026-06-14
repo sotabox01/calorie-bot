@@ -48,7 +48,40 @@ async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /save — сохранить продукты из последней записи в референсы\n"
         "• /today — итог за сегодня\n"
         "• /undo — отменить последнюю запись\n"
-        "• /reset — сбросить сегодняшние записи"
+        "• /reset — сбросить сегодняшние записи\n"
+        "• /help — подробная справка по командам"
+    )
+
+
+async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Подробная справка по командам."""
+    await update.message.reply_text(
+        "📖 CalorieBot — справка\n\n"
+        "▸ /goal <ккал> <белок_г>\n"
+        "  Установить дневные цели. Пример: /goal 1800 120\n"
+        "  Без аргументов — показать текущие цели.\n\n"
+        "▸ /recipe <описание рецепта>\n"
+        "  Разобрать рецепт: ингредиенты с весом, итоговое КБЖУ, на 100г.\n"
+        "  Пример: /recipe Курица 930г (16г б, 145 ккал). Готовая смесь 589г\n\n"
+        "▸ /import <список продуктов>\n"
+        "  Импортировать свои КБЖУ в базу референсов.\n"
+        "  Пример: /import Гречка варёная — 100г: 110 ккал, 4г б, 2г ж, 23г у\n\n"
+        "▸ /save [названия]\n"
+        "  Сохранить продукты из последней записи в референсы.\n"
+        "  Без аргументов — все продукты. С аргументами — фильтр по имени.\n\n"
+        "▸ /today\n"
+        "  Показать итог за сегодня без добавления записи.\n\n"
+        "▸ /undo\n"
+        "  Отменить последнюю запись за сегодня.\n\n"
+        "▸ /reset\n"
+        "  Удалить все записи за сегодня.\n\n"
+        "💡 Как просто записать еду:\n"
+        "  Пиши что и сколько съел — бот сам разберёт.\n"
+        "  «куриная грудка 200г, гречка 150г, масло 10г»\n"
+        "  «миска 350г, вес 680г — суп» (бот вычтет тару)\n"
+        "  «яйцо 2шт» (оценит вес сам)\n\n"
+        "📌 Иконки:\n"
+        "  📌 = твои цифры, ✅ = из референсов, ⚡ = оценка ИИ"
     )
 
 
@@ -431,6 +464,7 @@ def main() -> None:
     app.add_handler(CommandHandler("undo", undo_command, USER_FILTER))
     app.add_handler(CommandHandler("save", save_command, USER_FILTER))
     app.add_handler(CommandHandler("recipe", recipe_command, USER_FILTER))
+    app.add_handler(CommandHandler("help", help_command, USER_FILTER))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & USER_FILTER, handle_message))
 
     logger.info("🚀 CalorieBot запущен")
