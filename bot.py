@@ -234,6 +234,7 @@ async def undo_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = update.effective_user.id
     today = date.today().isoformat()
     conn = sqlite3.connect(settings.db_path)
+    conn.row_factory = sqlite3.Row
     row = conn.execute(
         "SELECT id, raw_text FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp DESC LIMIT 1",
         (user_id, today),
