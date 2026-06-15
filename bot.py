@@ -111,10 +111,10 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     # ── 2. Суммируем ──
-    total_kcal = sum(i["kcal"] for i in items)
-    total_protein = sum(i["protein_g"] for i in items)
-    total_fat = sum(i["fat_g"] for i in items)
-    total_carbs = sum(i["carbs_g"] for i in items)
+    total_kcal = sum(i['kcal'] for i in items)
+    total_protein = sum(i['protein_g'] for i in items)
+    total_fat = sum(i['fat_g'] for i in items)
+    total_carbs = sum(i['carbs_g'] for i in items)
 
     # ── 3. Nag check (before save) ──
     from datetime import datetime, timedelta
@@ -142,8 +142,8 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
 
     lines = ["✅ Записано:"]
     for i in items:
-        wt = " (оценочно)" if i["weight_type"] == "estimated" else ""
-        lines.append(f"• {i['name']} — {i["weight_g"]:.0f}г{wt} ({i["kcal"]:.0f} ккал, {i["protein_g"]:.1f}г б)")
+        wt = " (оценочно)" if i['weight_type'] == "estimated" else ""
+        lines.append(f"• {i['name']} — {i['weight_g']:.0f}г{wt} ({i['kcal']:.0f} ккал, {i['protein_g']:.1f}г б)")
 
     lines.append("")
     lines.append(f"📊 Итого за сегодня ({date.today().isoformat()}):")
@@ -328,9 +328,9 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     lines = [f"✅ Сохранено {len(to_save)} продуктов(а) в референсы:"]
     for i in to_save:
-        kcal = i["kcal"]
-        wt = i["weight_g"]
-        prot = i["protein_g"]
+        kcal = i['kcal']
+        wt = i['weight_g']
+        prot = i['protein_g']
         lines.append(f"  • {i['name']}: {kcal:.0f} ккал, {prot:.1f}г б (на {wt:.0f}г)")
 
     await update.message.reply_text("\n".join(lines))
