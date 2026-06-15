@@ -202,5 +202,43 @@ class Database:
         )
         return "\n".join(lines)
 
+    # ── History ────────────────────────────────────────────────
+
+    def get_history_days(
+        self, user_id: int, limit: int = 5, offset: int = 0
+    ) -> list[dict]:
+        """Return distinct dates with daily totals, newest first."""
+        rows = self._conn.execute(
+            """SELECT date,
+                     SUM(total_kcal)    AS kcal,
+                     SUM(total_protein) AS protein,
+                     SUM(total_fat)     AS fat,
+                     SUM(total_carbs)   AS carbs,
+                     COUNT(*)           AS entries_count
+              FROM entries
+              WHERE user_id = ?
+              GROUP BY date
+              ORDER BY date DESC
+              LIMIT ? OFFSET ?""",
+            (user_id, limit, offset),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_history_total_days(self, user_id: int) -> int:
+        """Count distinct days with entries."""
+        row = self._conn.execute(
+            "SELECT COUNT(DISTINCT date) AS cnt FROM entries WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return row["cnt"]
+
+    def get_day_entries(self, user_id: int, date_str: str) -> list[dict]:
+        """Return all entries for a specific date."""
+        rows = self._conn.execute(
+            "SELECT * FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp",
+            (user_id, date_str),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def close(self) -> None:
         self._conn.close()

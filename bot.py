@@ -11,8 +11,8 @@ import json
 import logging
 from datetime import date
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 from config import settings
 from db import Database
@@ -49,6 +49,7 @@ async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /today — итог за сегодня\n"
         "• /undo [N] — отменить N последних записей (без N = 1)\n"
         "• /reset — сбросить сегодняшние записи\n"
+        "• /history — история дней с детализацией\n"
         "• /help — подробная справка по командам"
     )
 
@@ -75,6 +76,8 @@ async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
         "  Отменить N последних записей. /undo = 1, /undo 2 = 2 последние.\n\n"
         "▸ /reset\n"
         "  Удалить все записи за сегодня.\n\n"
+        "▸ /history\n"
+        "  История дней с пагинацией и детализацией.\n\n"
         "💡 Как просто записать еду:\n"
         "  Пиши что и сколько съел — бот сам разберёт.\n"
         "  «куриная грудка 200г, гречка 150г, масло 10г»\n"
@@ -472,7 +475,123 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text("\n".join(lines))
 
 
-# ── Main ────────────────────────────────────────────────────
+# ── History ─────────────────────────────────────────────────
+
+
+WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+DAYS_PER_PAGE = 5
+
+
+def _build_history_keyboard(days: list[dict], page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Build inline keyboard for history page."""
+    kb = []
+    for d in days:
+        dt = date.fromisoformat(d["date"])
+        wd = WEEKDAYS_RU[dt.weekday()]
+        label = f"{wd}, {dt.day:02d}.{dt.month:02d} — {d['kcal']:.0f}/{d['protein']:.0f}г б"
+        kb.append([InlineKeyboardButton(label.strip(), callback_data=f"history:day:{d['date']}")])
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"history:page:{page - 1}"))
+    nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="history:nop"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"history:page:{page + 1}"))
+    if nav:
+        kb.append(nav)
+
+    return InlineKeyboardMarkup(kb)
+
+
+async def history_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показать историю дней с пагинацией."""
+    user_id = update.effective_user.id
+    total_days = db.get_history_total_days(user_id)
+
+    if total_days == 0:
+        await update.message.reply_text("📭 История пуста. Начни записывать еду!")
+        return
+
+    total_pages = max(1, (total_days + DAYS_PER_PAGE - 1) // DAYS_PER_PAGE)
+    days = db.get_history_days(user_id, limit=DAYS_PER_PAGE, offset=0)
+    us = db.get_user_settings(user_id)
+
+    lines = ["📅 История дней"]
+    if us:
+        lines.append(f"Цель: {us['daily_kcal']:.0f} ккал, {us['daily_protein']:.0f}г б")
+    lines.append("")
+
+    await update.message.reply_text(
+        "\n".join(lines),
+        reply_markup=_build_history_keyboard(days, 0, total_pages),
+    )
+
+
+async def history_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle history inline button presses."""
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    data = query.data
+
+    if data == "history:nop":
+        return
+
+    parts = data.split(":")
+    action = parts[1]
+
+    if action == "page":
+        page = int(parts[2])
+        offset = page * DAYS_PER_PAGE
+        total_days = db.get_history_total_days(user_id)
+        total_pages = max(1, (total_days + DAYS_PER_PAGE - 1) // DAYS_PER_PAGE)
+        days = db.get_history_days(user_id, limit=DAYS_PER_PAGE, offset=offset)
+        us = db.get_user_settings(user_id)
+
+        lines = ["📅 История дней"]
+        if us:
+            lines.append(f"Цель: {us['daily_kcal']:.0f} ккал, {us['daily_protein']:.0f}г б")
+        lines.append("")
+
+        await query.edit_message_text(
+            "\n".join(lines),
+            reply_markup=_build_history_keyboard(days, page, total_pages),
+        )
+
+    elif action == "day":
+        date_str = parts[2]
+        entries = db.get_day_entries(user_id, date_str)
+        us = db.get_user_settings(user_id)
+
+        dt = date.fromisoformat(date_str)
+        wd = WEEKDAYS_RU[dt.weekday()]
+        header = f"📅 {wd}, {dt.day:02d}.{dt.month:02d}.{dt.year}"
+
+        total_kcal = sum(e["total_kcal"] for e in entries)
+        total_protein = sum(e["total_protein"] for e in entries)
+        total_fat = sum(e["total_fat"] for e in entries)
+        total_carbs = sum(e["total_carbs"] for e in entries)
+
+        lines = [header, ""]
+        lines.append(f"📊 Итого:")
+        lines.append(f"  • Калории: {total_kcal:.0f}" + (f" / {us['daily_kcal']:.0f}" if us else ""))
+        lines.append(f"  • Белок: {total_protein:.1f}" + (f" / {us['daily_protein']:.0f}" if us else ""))
+        lines.append(f"  • Жиры: {total_fat:.1f} г")
+        lines.append(f"  • Углеводы: {total_carbs:.1f} г")
+        lines.append("")
+        lines.append(f"📝 Записей: {len(entries)}")
+        lines.append("")
+
+        for i, e in enumerate(entries, 1):
+            lines.append(f"{i}. «{e['raw_text'][:60]}»")
+            lines.append(f"   {e['total_kcal']:.0f} ккал, {e['total_protein']:.1f}г б")
+
+        # Add "Назад" button
+        kb = [[InlineKeyboardButton("◀️ Назад к списку", callback_data="history:page:0")]]
+        await query.edit_message_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
 
 
 USER_FILTER = filters.User(user_id=settings.owner_id)
@@ -490,6 +609,8 @@ def main() -> None:
     app.add_handler(CommandHandler("save", save_command, USER_FILTER))
     app.add_handler(CommandHandler("recipe", recipe_command, USER_FILTER))
     app.add_handler(CommandHandler("help", help_command, USER_FILTER))
+    app.add_handler(CommandHandler("history", history_command, USER_FILTER))
+    app.add_handler(CallbackQueryHandler(history_callback, pattern="^history:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & USER_FILTER, handle_message))
 
     logger.info("🚀 CalorieBot запущен")
