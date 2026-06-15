@@ -583,7 +583,7 @@ async def history_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
         lines.append("")
 
         for i, e in enumerate(entries, 1):
-            lines.append(f"{i}. «{e['raw_text'][:60]}»")
+            lines.append(f"{i}. «{e['raw_text']}»")
             lines.append(f"   {e['total_kcal']:.0f} ккал, {e['total_protein']:.1f}г б")
 
         # Add "Назад" button
