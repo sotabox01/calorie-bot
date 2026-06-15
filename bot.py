@@ -47,7 +47,7 @@ async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /import — импортировать свои КБЖУ продуктов\n"
         "• /save — сохранить продукты из последней записи в референсы\n"
         "• /today — итог за сегодня\n"
-        "• /undo — отменить последнюю запись\n"
+        "• /undo [N] — отменить N-ю запись (без N = последнюю)\n"
         "• /reset — сбросить сегодняшние записи\n"
         "• /help — подробная справка по командам"
     )
@@ -71,8 +71,8 @@ async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
         "  Без аргументов — все продукты. С аргументами — фильтр по имени.\n\n"
         "▸ /today\n"
         "  Показать итог за сегодня без добавления записи.\n\n"
-        "▸ /undo\n"
-        "  Отменить последнюю запись за сегодня.\n\n"
+        "▸ /undo [N]\n"
+        "  Отменить N-ю запись с конца. /undo = последнюю, /undo 2 = предпоследнюю.\n\n"
         "▸ /reset\n"
         "  Удалить все записи за сегодня.\n\n"
         "💡 Как просто записать еду:\n"
@@ -229,24 +229,42 @@ async def reset_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text("🗑 Записи за сегодня удалены.")
 
 
-async def undo_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отменить последнюю запись."""
+async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отменить последнюю запись или N-ю с конца: /undo [N]"""
     user_id = update.effective_user.id
     today = date.today().isoformat()
+
+    # Какую по счёту отменяем (1 = последняя)
+    n = 1
+    if context.args:
+        try:
+            n = int(context.args[0])
+            if n < 1:
+                await update.message.reply_text("🔢 Номер должен быть ≥ 1. Пример: /undo 2")
+                return
+        except ValueError:
+            await update.message.reply_text("🔢 Напиши число. Пример: /undo 2")
+            return
+
     conn = sqlite3.connect(settings.db_path)
     conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT id, raw_text FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp DESC LIMIT 1",
-        (user_id, today),
-    ).fetchone()
-    if row:
-        conn.execute("DELETE FROM entries WHERE id = ?", (row["id"],))
-        conn.commit()
+    rows = conn.execute(
+        "SELECT id, raw_text FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp DESC LIMIT ?",
+        (user_id, today, n),
+    ).fetchall()
+
+    if n > len(rows):
         conn.close()
-        await update.message.reply_text(f"🗑 Отменено: «{row['raw_text'][:60]}…»")
-    else:
-        conn.close()
-        await update.message.reply_text("🤷 Нет записей за сегодня.")
+        await update.message.reply_text(
+            f"🤷 У тебя всего {len(rows)} записей за сегодня. Используй /undo 1 … /undo {len(rows)}"
+        )
+        return
+
+    row = rows[-1]  # n-я с конца = последняя в списке из LIMIT n
+    conn.execute("DELETE FROM entries WHERE id = ?", (row["id"],))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text(f"🗑 Отменено (#{n}): «{row['raw_text'][:60]}…»")
 
 
 async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
