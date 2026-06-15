@@ -103,16 +103,11 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
         items = await parser.parse(text, context=ref_text or None)
     except Exception as e:
         logger.exception("LLM parse error")
-        await update.message.reply_text(
-            "❌ Ошибка при разборе текста. Попробуй ещё раз или напиши проще."
-        )
+        await update.message.reply_text("❌ Ошибка при разборе текста. Попробуй ещё раз или напиши проще.")
         return
 
     if not items:
-        await update.message.reply_text(
-            "🤷 Не вижу еды в сообщении. Напиши, что и сколько съел. "
-            "Если хочешь добавить свои данные по продуктам — используй /import"
-        )
+        await update.message.reply_text("🤷 Не вижу еды в сообщении. Напиши, что и сколько съел. Если хочешь добавить свои данные по продуктам — используй /import")
         return
 
     # ── 2. Суммируем ──
@@ -121,41 +116,57 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
     total_fat = sum(i["fat_g"] for i in items)
     total_carbs = sum(i["carbs_g"] for i in items)
 
-    # ── 3. Сохраняем ──
+    # ── 3. Nag check (before save) ──
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    nag_msgs: list[str] = []
+    last_ts = db.get_last_entry_time(user_id)
+    if last_ts:
+        last_dt = datetime.fromisoformat(last_ts)
+        mins_since = (now - last_dt).total_seconds() / 60
+        if mins_since < 30:
+            nag_msgs.append(f"🤨 Ты же ел {int(mins_since)} мин назад. Может хватит?")
+    two_h_ago = (now - timedelta(hours=2)).isoformat()
+    snack_count = db.count_snacks_since(user_id, two_h_ago)
+    if snack_count >= 3:
+        nag_msgs.append(f"😤 {snack_count} перекуса за 2 часа! Хватит жевать.")
+    elif snack_count == 2:
+        nag_msgs.append(f"🤔 Уже {snack_count} перекуса за 2 часа...")
+
+    # ── 4. Сохраняем ──
     db.add_entry(user_id, items, total_kcal, total_protein, total_fat, total_carbs, text)
 
-    # ── 4. Итог дня ──
+    # ── 5. Итог дня ──
     today_totals = db.get_today_totals(user_id)
     us = db.get_user_settings(user_id)
 
     lines = ["✅ Записано:"]
     for i in items:
         wt = " (оценочно)" if i["weight_type"] == "estimated" else ""
-        lines.append(
-            f"• {i['name']} — {i['weight_g']:.0f}г{wt} "
-            f"({i['kcal']:.0f} ккал, {i['protein_g']:.1f}г б)"
-        )
+        lines.append(f"• {i["name"]} — {i["weight_g"]:.0f}г{wt} ({i["kcal"]:.0f} ккал, {i["protein_g"]:.1f}г б)")
 
     lines.append("")
     lines.append(f"📊 Итого за сегодня ({date.today().isoformat()}):")
-    lines.append(f"• Калории: {today_totals['kcal']:.0f} / {us['daily_kcal']:.0f} ккал"
-                 if us else f"• Калории: {today_totals['kcal']:.0f} ккал")
-    lines.append(f"• Белок: {today_totals['protein']:.1f} / {us['daily_protein']:.0f} г"
-                 if us else f"• Белок: {today_totals['protein']:.1f} г")
-    lines.append(f"• Жиры: {today_totals['fat']:.1f} г")
-    lines.append(f"• Углеводы: {today_totals['carbs']:.1f} г")
+    if us:
+        lines.append(f"• Калории: {today_totals['kcal']:.0f} / {us['daily_kcal']:.0f} ккал")
+        lines.append(f"• Белок: {today_totals['protein']:.1f} / {us['daily_protein']:.0f} г")
+    else:
+        lines.append(f"• Калории: {today_totals['kcal']:.0f} ккал")
+        lines.append(f"• Белок: {today_totals['protein']:.1f} г")
+    lines.append(f"• Жиры: {today_totals["fat"]:.1f} г")
+    lines.append(f"• Углеводы: {today_totals["carbs"]:.1f} г")
 
     if us:
         rem_kcal = us["daily_kcal"] - today_totals["kcal"]
         rem_prot = us["daily_protein"] - today_totals["protein"]
-        lines.append(f"")
         lines.append(f"📌 Осталось: {rem_kcal:.0f} ккал, {rem_prot:.1f}г белка")
     else:
-        lines.append(f"")
         lines.append(f"💡 Установи цели: /goal 1800 120")
 
-    await update.message.reply_text("\n".join(lines))
+    for msg in nag_msgs:
+        lines.append(msg)
 
+    await update.message.reply_text("\n".join(lines))
 
 async def today_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показать итог за сегодня без добавления записи."""
