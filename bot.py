@@ -231,6 +231,7 @@ async def reset_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отменить N последних записей: /undo [N] (по умолч. 1)"""
+    import sqlite3
     user_id = update.effective_user.id
     today = date.today().isoformat()
 
