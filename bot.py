@@ -47,7 +47,7 @@ async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /import — импортировать свои КБЖУ продуктов\n"
         "• /save — сохранить продукты из последней записи в референсы\n"
         "• /today — итог за сегодня\n"
-        "• /undo [N] — отменить N-ю запись (без N = последнюю)\n"
+        "• /undo [N] — отменить N последних записей (без N = 1)\n"
         "• /reset — сбросить сегодняшние записи\n"
         "• /help — подробная справка по командам"
     )
@@ -72,7 +72,7 @@ async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
         "▸ /today\n"
         "  Показать итог за сегодня без добавления записи.\n\n"
         "▸ /undo [N]\n"
-        "  Отменить N-ю запись с конца. /undo = последнюю, /undo 2 = предпоследнюю.\n\n"
+        "  Отменить N последних записей. /undo = 1, /undo 2 = 2 последние.\n\n"
         "▸ /reset\n"
         "  Удалить все записи за сегодня.\n\n"
         "💡 Как просто записать еду:\n"
@@ -230,17 +230,17 @@ async def reset_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отменить последнюю запись или N-ю с конца: /undo [N]"""
+    """Отменить N последних записей: /undo [N] (по умолч. 1)"""
     user_id = update.effective_user.id
     today = date.today().isoformat()
 
-    # Какую по счёту отменяем (1 = последняя)
+    # Сколько последних записей отменяем
     n = 1
     if context.args:
         try:
             n = int(context.args[0])
             if n < 1:
-                await update.message.reply_text("🔢 Номер должен быть ≥ 1. Пример: /undo 2")
+                await update.message.reply_text("🔢 Число должно быть ≥ 1. Пример: /undo 2")
                 return
         except ValueError:
             await update.message.reply_text("🔢 Напиши число. Пример: /undo 2")
@@ -256,15 +256,20 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if n > len(rows):
         conn.close()
         await update.message.reply_text(
-            f"🤷 У тебя всего {len(rows)} записей за сегодня. Используй /undo 1 … /undo {len(rows)}"
+            f"🤷 У тебя всего {len(rows)} записей за сегодня. Нечего отменять."
         )
         return
 
-    row = rows[-1]  # n-я с конца = последняя в списке из LIMIT n
-    conn.execute("DELETE FROM entries WHERE id = ?", (row["id"],))
+    ids = [r["id"] for r in rows]
+    placeholders = ",".join("?" * len(ids))
+    conn.execute(f"DELETE FROM entries WHERE id IN ({placeholders})", ids)
     conn.commit()
     conn.close()
-    await update.message.reply_text(f"🗑 Отменено (#{n}): «{row['raw_text'][:60]}…»")
+
+    if n == 1:
+        await update.message.reply_text(f"🗑 Отменено: «{rows[0]['raw_text'][:60]}…»")
+    else:
+        await update.message.reply_text(f"🗑 Отменено {n} записей.")
 
 
 async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
