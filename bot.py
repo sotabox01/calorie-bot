@@ -153,12 +153,12 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
     else:
         lines.append(f"• Калории: {today_totals['kcal']:.0f} ккал")
         lines.append(f"• Белок: {today_totals['protein']:.1f} г")
-    lines.append(f"• Жиры: {today_totals["fat"]:.1f} г")
-    lines.append(f"• Углеводы: {today_totals["carbs"]:.1f} г")
+    lines.append(f"• Жиры: {today_totals['fat']:.1f} г")
+    lines.append(f"• Углеводы: {today_totals['carbs']:.1f} г")
 
     if us:
-        rem_kcal = us["daily_kcal"] - today_totals["kcal"]
-        rem_prot = us["daily_protein"] - today_totals["protein"]
+        rem_kcal = us['daily_kcal'] - today_totals['kcal']
+        rem_prot = us['daily_protein'] - today_totals['protein']
         lines.append(f"📌 Осталось: {rem_kcal:.0f} ккал, {rem_prot:.1f}г белка")
     else:
         lines.append(f"💡 Установи цели: /goal 1800 120")
@@ -195,8 +195,8 @@ async def today_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> 
     lines.append(f"• Углеводы: {totals['carbs']:.1f} г")
 
     if us:
-        rem_kcal = us["daily_kcal"] - totals["kcal"]
-        rem_prot = us["daily_protein"] - totals["protein"]
+        rem_kcal = us['daily_kcal'] - totals["kcal"]
+        rem_prot = us['daily_protein'] - totals["protein"]
         lines.append(f"\n📌 Осталось: {rem_kcal:.0f} ккал, {rem_prot:.1f}г белка")
 
     await update.message.reply_text("\n".join(lines))
