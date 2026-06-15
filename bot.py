@@ -124,7 +124,7 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
     if last_ts:
         last_dt = datetime.fromisoformat(last_ts)
         mins_since = (now - last_dt).total_seconds() / 60
-        if mins_since < 30:
+        if 3 < mins_since < 30:
             nag_msgs.append(f"🤨 Ты же ел {int(mins_since)} мин назад. Может хватит?")
     two_h_ago = (now - timedelta(hours=2)).isoformat()
     snack_count = db.count_snacks_since(user_id, two_h_ago)
