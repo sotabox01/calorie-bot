@@ -133,6 +133,32 @@ class Database:
                  daily_protein = excluded.daily_protein""",
             (user_id, kcal, protein),
         )
+
+    def set_remind_interval(self, user_id: int, hours: int) -> None:
+        self._conn.execute(
+            """INSERT INTO user_settings (user_id, remind_interval)
+               VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                remind_interval = excluded.remind_interval""",
+            (user_id, hours),
+        )
+        self._conn.commit()
+
+    def get_last_entry_time(self, user_id: int) -> str | None:
+        """Return ISO timestamp of most recent entry, or None."""
+        row = self._conn.execute(
+            "SELECT timestamp FROM entries WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        return row["timestamp"] if row else None
+
+    def count_snacks_since(self, user_id: int, since_iso: str) -> int:
+        """Count entries with total_kcal < 300 from a given time onward."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS cnt FROM entries WHERE user_id = ? AND timestamp >= ? AND total_kcal < 300",
+            (user_id, since_iso),
+        ).fetchone()
+        return row["cnt"]
         self._conn.commit()
 
     # ── Food reference ────────────────────────────────────────
