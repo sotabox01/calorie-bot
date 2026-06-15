@@ -143,7 +143,7 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
     lines = ["✅ Записано:"]
     for i in items:
         wt = " (оценочно)" if i["weight_type"] == "estimated" else ""
-        lines.append(f"• {i["name"]} — {i["weight_g"]:.0f}г{wt} ({i["kcal"]:.0f} ккал, {i["protein_g"]:.1f}г б)")
+        lines.append(f"• {i['name']} — {i["weight_g"]:.0f}г{wt} ({i["kcal"]:.0f} ккал, {i["protein_g"]:.1f}г б)")
 
     lines.append("")
     lines.append(f"📊 Итого за сегодня ({date.today().isoformat()}):")
