@@ -50,6 +50,7 @@ async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /undo [N] — отменить N последних записей (без N = 1)\n"
         "• /reset — сбросить сегодняшние записи\n"
         "• /history — история дней с детализацией\n"
+        "• /settings — настройки\n"
         "• /help — подробная справка по командам"
     )
 
@@ -78,6 +79,8 @@ async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
         "  Удалить все записи за сегодня.\n\n"
         "▸ /history\n"
         "  История дней с пагинацией и детализацией.\n\n"
+        "▸ /settings\n"
+        "  Настройки: скрывать/показывать КБЖУ при записи еды.\n\n"
         "💡 Как просто записать еду:\n"
         "  Пиши что и сколько съел — бот сам разберёт.\n"
         "  «куриная грудка 200г, гречка 150г, масло 10г»\n"
@@ -136,7 +139,19 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
     # ── 4. Сохраняем ──
     db.add_entry(user_id, items, total_kcal, total_protein, total_fat, total_carbs, text)
 
-    # ── 5. Итог дня ──
+    # ── 5. Ответ ──
+    hide = db.get_hide_nutrients(user_id)
+
+    if hide:
+        # Режим «не показывать КБЖУ» — только названия продуктов
+        food_names = [i['name'] for i in items]
+        lines = [f"✅ Записано: {', '.join(food_names)}"]
+        for msg in nag_msgs:
+            lines.append(msg)
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    # ── Полный ответ с КБЖУ ──
     today_totals = db.get_today_totals(user_id)
     us = db.get_user_settings(user_id)
 
@@ -167,6 +182,7 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
         lines.append(msg)
 
     await update.message.reply_text("\n".join(lines))
+
 
 async def today_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показать итог за сегодня без добавления записи."""
@@ -605,6 +621,56 @@ async def history_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
         )
 
 
+# ── Settings ─────────────────────────────────────────────────
+
+
+async def settings_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show settings with inline toggle."""
+    user_id = update.effective_user.id
+    hidden = db.get_hide_nutrients(user_id)
+
+    status = "✅ Скрыты" if hidden else "❌ Показаны"
+    lines = [
+        "⚙️ Настройки",
+        "",
+        "При внесении записи о еде:",
+        f"  {status} — калории и белок",
+        "",
+        "Если скрыты, в ответе будет только название продукта.",
+        "Итоги дня — в /today.",
+    ]
+
+    btn_label = "🙈 Скрывать КБЖУ" if not hidden else "👀 Показывать КБЖУ"
+    kb = [[InlineKeyboardButton(btn_label, callback_data="settings:toggle")]]
+    await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def settings_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle settings toggle."""
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+
+    if query.data == "settings:toggle":
+        current = db.get_hide_nutrients(user_id)
+        db.set_hide_nutrients(user_id, not current)
+
+        hidden = not current
+        status = "✅ Скрыты" if hidden else "❌ Показаны"
+        lines = [
+            "⚙️ Настройки",
+            "",
+            "При внесении записи о еде:",
+            f"  {status} — калории и белок",
+            "",
+            "Если скрыты, в ответе будет только название продукта.",
+            "Итоги дня — в /today.",
+        ]
+        btn_label = "🙈 Скрывать КБЖУ" if not hidden else "👀 Показывать КБЖУ"
+        kb = [[InlineKeyboardButton(btn_label, callback_data="settings:toggle")]]
+        await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
+
+
 USER_FILTER = filters.User(user_id=settings.owner_id)
 
 
@@ -621,7 +687,9 @@ def main() -> None:
     app.add_handler(CommandHandler("recipe", recipe_command, USER_FILTER))
     app.add_handler(CommandHandler("help", help_command, USER_FILTER))
     app.add_handler(CommandHandler("history", history_command, USER_FILTER))
+    app.add_handler(CommandHandler("settings", settings_command, USER_FILTER))
     app.add_handler(CallbackQueryHandler(history_callback, pattern="^history:"))
+    app.add_handler(CallbackQueryHandler(settings_callback, pattern="^settings:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & USER_FILTER, handle_message))
 
     logger.info("🚀 CalorieBot запущен")

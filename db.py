@@ -60,6 +60,16 @@ class Database:
         """)
         self._conn.commit()
 
+        # Migration: add columns that may not exist yet
+        for table, col, col_type in [
+            ("user_settings", "hide_nutrients", "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
     # ── Food entries ──────────────────────────────────────────
 
     def add_entry(
@@ -129,10 +139,11 @@ class Database:
             """INSERT INTO user_settings (user_id, daily_kcal, daily_protein)
                VALUES (?, ?, ?)
                ON CONFLICT(user_id) DO UPDATE SET
-                 daily_kcal    = excluded.daily_kcal,
-                 daily_protein = excluded.daily_protein""",
+                daily_kcal    = excluded.daily_kcal,
+                daily_protein = excluded.daily_protein""",
             (user_id, kcal, protein),
         )
+        self._conn.commit()
 
     def set_remind_interval(self, user_id: int, hours: int) -> None:
         self._conn.execute(
@@ -141,6 +152,25 @@ class Database:
                ON CONFLICT(user_id) DO UPDATE SET
                 remind_interval = excluded.remind_interval""",
             (user_id, hours),
+        )
+        self._conn.commit()
+
+    def get_hide_nutrients(self, user_id: int) -> bool:
+        """Return whether nutrients are hidden on food logging."""
+        row = self._conn.execute(
+            "SELECT hide_nutrients FROM user_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return bool(row["hide_nutrients"]) if row else False
+
+    def set_hide_nutrients(self, user_id: int, value: bool) -> None:
+        """Set whether nutrients are hidden on food logging."""
+        self._conn.execute(
+            """INSERT INTO user_settings (user_id, hide_nutrients)
+               VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                hide_nutrients = excluded.hide_nutrients""",
+            (user_id, int(value)),
         )
         self._conn.commit()
 
@@ -159,7 +189,7 @@ class Database:
             (user_id, since_iso),
         ).fetchone()
         return row["cnt"]
-        self._conn.commit()
+        self._conn.commit()  # unreachable but kept for safety
 
     # ── Food reference ────────────────────────────────────────
 
