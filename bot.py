@@ -69,7 +69,7 @@ async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
         "  Импортировать свои КБЖУ в базу референсов.\n"
         "  Пример: /import Гречка варёная — 100г: 110 ккал, 4г б, 2г ж, 23г у\n\n"
         "▸ /save [названия]\n"
-        "  Сохранить продукты из последней записи в референсы.\n"
+        "  Сохранить продукты из последней записи или рецепта в референсы.\n"
         "  Без аргументов — все продукты. С аргументами — фильтр по имени.\n\n"
         "▸ /today\n"
         "  Показать итог за сегодня без добавления записи.\n\n"
@@ -320,7 +320,7 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if not row:
         conn.close()
-        await update.message.reply_text("🤷 Нет записей за сегодня. Сначала напиши, что съел.")
+        await update.message.reply_text("🤷 Нет записей за сегодня. Сначала напиши, что съел, или используй /recipe.")
         return
 
     items = json.loads(row["items_json"])
@@ -421,15 +421,34 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         lines.append(f"   На 100г: {per_100g.get('kcal', 0):.1f} ккал, "
                      f"{per_100g.get('protein_g', 0):.1f}г б")
 
+    # Auto-save new references if any
     if new_refs:
         lines.append("")
         lines.append("📌 Новые продукты для сохранения:")
         for r in new_refs:
             lines.append(f"  • {r['name']}: {r['kcal']:.0f} ккал, "
                          f"{r['protein_g']:.1f}г б (на 100г)")
+        db.import_foods(user_id, new_refs)
+        lines.append("✅ Сохранено в референсы автоматически!")
+
+    # Save ingredients as a food entry so /save can find them
+    total_kcal = sum(i["kcal"] for i in ingredients)
+    total_protein = sum(i["protein_g"] for i in ingredients)
+    total_fat = sum(i["fat_g"] for i in ingredients)
+    total_carbs = sum(i["carbs_g"] for i in ingredients)
+
+    db.add_entry(
+        user_id,
+        ingredients,
+        total_kcal,
+        total_protein,
+        total_fat,
+        total_carbs,
+        f"/recipe {dish_name}",
+    )
 
     lines.append("")
-    lines.append("💡 Сохранить: /save <название>")
+    lines.append("💡 Сохранить ингредиент по имени: /save <название>")
 
     await update.message.reply_text("\n".join(lines))
 
