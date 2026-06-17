@@ -63,6 +63,7 @@ class Database:
         # Migration: add columns that may not exist yet
         for table, col, col_type in [
             ("user_settings", "hide_nutrients", "INTEGER DEFAULT 0"),
+            ("user_settings", "last_recipe_dish", "TEXT DEFAULT NULL"),
         ]:
             try:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
@@ -174,6 +175,25 @@ class Database:
         )
         self._conn.commit()
 
+    def get_last_recipe_dish(self, user_id: int) -> str | None:
+        """Return dish name from the last /recipe, or None."""
+        row = self._conn.execute(
+            "SELECT last_recipe_dish FROM user_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return row["last_recipe_dish"] if row and row["last_recipe_dish"] else None
+
+    def set_last_recipe_dish(self, user_id: int, dish_name: str) -> None:
+        """Store dish name from a /recipe so /save can find it."""
+        self._conn.execute(
+            """INSERT INTO user_settings (user_id, last_recipe_dish)
+               VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                last_recipe_dish = excluded.last_recipe_dish""",
+            (user_id, dish_name),
+        )
+        self._conn.commit()
+
     def get_last_entry_time(self, user_id: int) -> str | None:
         """Return ISO timestamp of most recent entry, or None."""
         row = self._conn.execute(
@@ -189,7 +209,7 @@ class Database:
             (user_id, since_iso),
         ).fetchone()
         return row["cnt"]
-        self._conn.commit()  # unreachable but kept for safety
+        # Note: self._conn.commit() below is unreachable, kept for safety
 
     # ── Food reference ────────────────────────────────────────
 

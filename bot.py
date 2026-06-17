@@ -146,7 +146,6 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
     hide = db.get_hide_nutrients(user_id)
 
     if hide:
-        # Режим «не показывать КБЖУ» — только названия продуктов
         food_names = [i['name'] for i in items]
         lines = [f"✅ Записано: {', '.join(food_names)}"]
         for msg in nag_msgs:
@@ -154,7 +153,6 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("\n".join(lines))
         return
 
-    # ── Полный ответ с КБЖУ ──
     today_totals = db.get_today_totals(user_id)
     us = db.get_user_settings(user_id)
 
@@ -268,7 +266,6 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user_id = update.effective_user.id
     today = date.today().isoformat()
 
-    # Сколько последних записей отменяем
     n = 1
     if context.args:
         try:
@@ -319,7 +316,7 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     conn = sqlite3.connect(settings.db_path)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT items_json, raw_text FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp DESC LIMIT 1",
+        "SELECT items_json FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp DESC LIMIT 1",
         (user_id, today),
     ).fetchone()
 
@@ -339,33 +336,33 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 continue
         to_save.append(i)
 
-    if not to_save:
-        # If no ingredient matched, check if this is a /recipe entry
-        if row["raw_text"].startswith("/recipe "):
-            dish_name_from_raw = row["raw_text"][len("/recipe "):]
-            # Look up if this dish was auto-saved as a reference
+    if not to_save and filter_names:
+        # No ingredient matched — try renaming recipe reference
+        dish_name = db.get_last_recipe_dish(user_id)
+        if dish_name:
             ref_conn = sqlite3.connect(settings.db_path)
             ref = ref_conn.execute(
                 "SELECT * FROM food_reference WHERE user_id = ? AND name = ?",
-                (user_id, dish_name_from_raw.lower()),
+                (user_id, dish_name.lower()),
             ).fetchone()
             ref_conn.close()
 
-            if ref and filter_names:
+            if ref:
                 new_name = " ".join(filter_names)
-                conn2 = sqlite3.connect(settings.db_path)
-                conn2.execute(
+                upd_conn = sqlite3.connect(settings.db_path)
+                upd_conn.execute(
                     "UPDATE food_reference SET name = ? WHERE user_id = ? AND name = ?",
-                    (new_name.lower(), user_id, dish_name_from_raw.lower()),
+                    (new_name.lower(), user_id, dish_name.lower()),
                 )
-                conn2.commit()
-                conn2.close()
-                await update.message.reply_text(
-                    f"✏️ Блюдо «{dish_name_from_raw}» переименовано в «{new_name}»!"
-                )
+                upd_conn.commit()
+                upd_conn.close()
                 conn.close()
+                await update.message.reply_text(
+                    f"✏️ Блюдо «{dish_name}» переименовано в «{new_name}»!"
+                )
                 return
 
+    if not to_save:
         conn.close()
         await update.message.reply_text("🤷 Ничего не найдено для сохранения." if filter_names else "🤷 Нет продуктов в последней записи.")
         return
@@ -452,7 +449,7 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         lines.append(f"   На 100г: {per_100g.get('kcal', 0):.1f} ккал, "
                      f"{per_100g.get('protein_g', 0):.1f}г б")
 
-    # Auto-save new references if any
+    # Auto-save new references + remember dish name for /save rename
     if new_refs:
         lines.append("")
         lines.append("📌 Новые продукты для сохранения:")
@@ -462,21 +459,7 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         db.import_foods(user_id, new_refs)
         lines.append("✅ Сохранено в референсы автоматически!")
 
-    # Save ingredients as a food entry so /save can find them
-    total_kcal = sum(i["kcal"] for i in ingredients)
-    total_protein = sum(i["protein_g"] for i in ingredients)
-    total_fat = sum(i["fat_g"] for i in ingredients)
-    total_carbs = sum(i["carbs_g"] for i in ingredients)
-
-    db.add_entry(
-        user_id,
-        ingredients,
-        total_kcal,
-        total_protein,
-        total_fat,
-        total_carbs,
-        f"/recipe {dish_name}",
-    )
+    db.set_last_recipe_dish(user_id, dish_name.lower())
 
     lines.append("")
     lines.append("💡 Сохранить ингредиент по имени: /save <название>")
@@ -506,7 +489,6 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    # Парсим через LLM со спец. промптом для импорта
     try:
         items = await parser.parse(text, system=IMPORT_SYSTEM_PROMPT, max_tokens=32000, timeout=120)
     except json.JSONDecodeError as e:
@@ -532,10 +514,8 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("❌ Не смог распознать продукты. Попробуй в другом формате.")
         return
 
-    # Сохраняем в референсы
     added, updated = db.import_foods(user_id, items)
 
-    # Показываем, что сохранили
     lines = [f"✅ Импортировано продуктов: {len(items)}"]
     for i in items:
         name = i.get("name", "?")
@@ -560,7 +540,6 @@ DAYS_PER_PAGE = 5
 
 
 def _build_history_keyboard(days: list[dict], page: int, total_pages: int) -> InlineKeyboardMarkup:
-    """Build inline keyboard for history page."""
     kb = []
     for d in days:
         dt = date.fromisoformat(d["date"])
@@ -581,7 +560,6 @@ def _build_history_keyboard(days: list[dict], page: int, total_pages: int) -> In
 
 
 async def history_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Показать историю дней с пагинацией."""
     user_id = update.effective_user.id
     total_days = db.get_history_total_days(user_id)
 
@@ -605,7 +583,6 @@ async def history_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def history_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle history inline button presses."""
     query = update.callback_query
     await query.answer()
     user_id = update.effective_user.id
@@ -663,7 +640,6 @@ async def history_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
             lines.append(f"{i}. «{e['raw_text']}»")
             lines.append(f"   {e['total_kcal']:.0f} ккал, {e['total_protein']:.1f}г б")
 
-        # Add "Назад" button
         kb = [[InlineKeyboardButton("◀️ Назад к списку", callback_data="history:page:0")]]
         await query.edit_message_text(
             "\n".join(lines),
@@ -675,7 +651,6 @@ async def history_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def settings_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show settings with inline toggle."""
     user_id = update.effective_user.id
     hidden = db.get_hide_nutrients(user_id)
 
@@ -696,7 +671,6 @@ async def settings_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def settings_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle settings toggle."""
     query = update.callback_query
     await query.answer()
     user_id = update.effective_user.id
