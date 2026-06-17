@@ -64,13 +64,16 @@ async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
         "  Без аргументов — показать текущие цели.\n\n"
         "▸ /recipe <описание рецепта>\n"
         "  Разобрать рецепт: ингредиенты с весом, итоговое КБЖУ, на 100г.\n"
+        "  Ингредиенты сохраняются как запись, новые продукты — в референсы.\n"
+        "  /save <имя> после рецепта переименовывает блюдо.\n"
         "  Пример: /recipe Курица 930г (16г б, 145 ккал). Готовая смесь 589г\n\n"
         "▸ /import <список продуктов>\n"
         "  Импортировать свои КБЖУ в базу референсов.\n"
         "  Пример: /import Гречка варёная — 100г: 110 ккал, 4г б, 2г ж, 23г у\n\n"
         "▸ /save [названия]\n"
         "  Сохранить продукты из последней записи или рецепта в референсы.\n"
-        "  Без аргументов — все продукты. С аргументами — фильтр по имени.\n\n"
+        "  Без аргументов — все продукты. С аргументами — фильтр по имени.\n"
+        "  После /recipe: /save <имя> переименовывает блюдо.\n\n"
         "▸ /today\n"
         "  Показать итог за сегодня без добавления записи.\n\n"
         "▸ /undo [N]\n"
@@ -308,6 +311,7 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     Без аргументов — сохраняет все продукты из последней записи.
     С аргументами — сохраняет только те, что совпадают (по подстроке).
+    Если запись от /recipe и нет совпадений — переименовывает блюдо.
     """
     import sqlite3
     user_id = update.effective_user.id
@@ -315,7 +319,7 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     conn = sqlite3.connect(settings.db_path)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT items_json FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp DESC LIMIT 1",
+        "SELECT items_json, raw_text FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp DESC LIMIT 1",
         (user_id, today),
     ).fetchone()
 
@@ -336,6 +340,32 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         to_save.append(i)
 
     if not to_save:
+        # If no ingredient matched, check if this is a /recipe entry
+        if row["raw_text"].startswith("/recipe "):
+            dish_name_from_raw = row["raw_text"][len("/recipe "):]
+            # Look up if this dish was auto-saved as a reference
+            ref_conn = sqlite3.connect(settings.db_path)
+            ref = ref_conn.execute(
+                "SELECT * FROM food_reference WHERE user_id = ? AND name = ?",
+                (user_id, dish_name_from_raw.lower()),
+            ).fetchone()
+            ref_conn.close()
+
+            if ref and filter_names:
+                new_name = " ".join(filter_names)
+                conn2 = sqlite3.connect(settings.db_path)
+                conn2.execute(
+                    "UPDATE food_reference SET name = ? WHERE user_id = ? AND name = ?",
+                    (new_name.lower(), user_id, dish_name_from_raw.lower()),
+                )
+                conn2.commit()
+                conn2.close()
+                await update.message.reply_text(
+                    f"✏️ Блюдо «{dish_name_from_raw}» переименовано в «{new_name}»!"
+                )
+                conn.close()
+                return
+
         conn.close()
         await update.message.reply_text("🤷 Ничего не найдено для сохранения." if filter_names else "🤷 Нет продуктов в последней записи.")
         return
