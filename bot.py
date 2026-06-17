@@ -309,6 +309,7 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     Без аргументов — сохраняет все продукты из последней записи.
     С аргументами — сохраняет только те, что совпадают (по подстроке).
     """
+    import sqlite3
     user_id = update.effective_user.id
     today = date.today().isoformat()
     conn = sqlite3.connect(settings.db_path)
