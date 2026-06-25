@@ -122,35 +122,15 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
     total_fat = sum(i['fat_g'] for i in items)
     total_carbs = sum(i['carbs_g'] for i in items)
 
-    # ── 3. Nag check (before save) ──
-    from datetime import datetime, timedelta
-    now = datetime.now()
-    nag_msgs: list[str] = []
-    last_ts = db.get_last_entry_time(user_id)
-    if last_ts:
-        last_dt = datetime.fromisoformat(last_ts)
-        mins_since = (now - last_dt).total_seconds() / 60
-        if 3 < mins_since < 30:
-            nag_msgs.append(f"🤨 Ты же ел {int(mins_since)} мин назад. Может хватит?")
-    two_h_ago = (now - timedelta(hours=2)).isoformat()
-    snack_count = db.count_snacks_since(user_id, two_h_ago)
-    if snack_count >= 3:
-        nag_msgs.append(f"😤 {snack_count} перекуса за 2 часа! Хватит жевать.")
-    elif snack_count == 2:
-        nag_msgs.append(f"🤔 Уже {snack_count} перекуса за 2 часа...")
-
-    # ── 4. Сохраняем ──
+    # ── 3. Сохраняем ──
     db.add_entry(user_id, items, total_kcal, total_protein, total_fat, total_carbs, text)
 
-    # ── 5. Ответ ──
+    # ── 4. Ответ ──
     hide = db.get_hide_nutrients(user_id)
 
     if hide:
         food_names = [i['name'] for i in items]
-        lines = [f"✅ Записано: {', '.join(food_names)}"]
-        for msg in nag_msgs:
-            lines.append(msg)
-        await update.message.reply_text("\n".join(lines))
+        await update.message.reply_text(f"✅ Записано: {', '.join(food_names)}")
         return
 
     today_totals = db.get_today_totals(user_id)
@@ -178,9 +158,6 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
         lines.append(f"📌 Осталось: {rem_kcal:.0f} ккал, {rem_prot:.1f}г белка")
     else:
         lines.append(f"💡 Установи цели: /goal 1800 120")
-
-    for msg in nag_msgs:
-        lines.append(msg)
 
     await update.message.reply_text("\n".join(lines))
 
