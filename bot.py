@@ -437,6 +437,17 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         lines.append("✅ Сохранено в референсы автоматически!")
 
     db.set_last_recipe_dish(user_id, dish_name.lower())
+    if per_100g:
+        db.import_foods(user_id, [{
+            "name": dish_name,
+            "kcal": per_100g.get("kcal", 0),
+            "protein_g": per_100g.get("protein_g", 0),
+            "fat_g": per_100g.get("fat_g", 0),
+            "carbs_g": per_100g.get("carbs_g", 0),
+            "weight_g": 100,
+            "weight_type": "exact",
+            "source": "estimated",
+        }])
 
     lines.append("")
     lines.append("💡 Сохранить ингредиент по имени: /save <название>")
