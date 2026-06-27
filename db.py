@@ -63,7 +63,7 @@ class Database:
         # Migration: add columns that may not exist yet
         for table, col, col_type in [
             ("user_settings", "hide_nutrients", "INTEGER DEFAULT 0"),
-            ("user_settings", "last_recipe_dish", "TEXT DEFAULT NULL"),
+            ("user_settings", "pending_recipe", "TEXT DEFAULT NULL"),
         ]:
             try:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
@@ -157,7 +157,6 @@ class Database:
         self._conn.commit()
 
     def get_hide_nutrients(self, user_id: int) -> bool:
-        """Return whether nutrients are hidden on food logging."""
         row = self._conn.execute(
             "SELECT hide_nutrients FROM user_settings WHERE user_id = ?",
             (user_id,),
@@ -165,7 +164,6 @@ class Database:
         return bool(row["hide_nutrients"]) if row else False
 
     def set_hide_nutrients(self, user_id: int, value: bool) -> None:
-        """Set whether nutrients are hidden on food logging."""
         self._conn.execute(
             """INSERT INTO user_settings (user_id, hide_nutrients)
                VALUES (?, ?)
@@ -175,27 +173,31 @@ class Database:
         )
         self._conn.commit()
 
-    def get_last_recipe_dish(self, user_id: int) -> str | None:
-        """Return dish name from the last /recipe, or None."""
+    def get_pending_recipe(self, user_id: int) -> dict | None:
+        """Return recipe data from the last /recipe, or None."""
         row = self._conn.execute(
-            "SELECT last_recipe_dish FROM user_settings WHERE user_id = ?",
+            "SELECT pending_recipe FROM user_settings WHERE user_id = ?",
             (user_id,),
         ).fetchone()
-        return row["last_recipe_dish"] if row and row["last_recipe_dish"] else None
+        if not row or not row["pending_recipe"]:
+            return None
+        return json.loads(row["pending_recipe"])
 
-    def set_last_recipe_dish(self, user_id: int, dish_name: str) -> None:
-        """Store dish name from a /recipe so /save can find it."""
+    def set_pending_recipe(self, user_id: int, data: dict | None) -> None:
+        """Store recipe data temporarily, or clear it. /save <name> creates the reference."""
         self._conn.execute(
-            """INSERT INTO user_settings (user_id, last_recipe_dish)
+            """INSERT INTO user_settings (user_id, pending_recipe)
                VALUES (?, ?)
                ON CONFLICT(user_id) DO UPDATE SET
-                last_recipe_dish = excluded.last_recipe_dish""",
-            (user_id, dish_name),
+                pending_recipe = excluded.pending_recipe""",
+            (
+                user_id,
+                json.dumps(data, ensure_ascii=False) if data is not None else None,
+            ),
         )
         self._conn.commit()
 
     def get_last_entry_time(self, user_id: int) -> str | None:
-        """Return ISO timestamp of most recent entry, or None."""
         row = self._conn.execute(
             "SELECT timestamp FROM entries WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1",
             (user_id,),
@@ -203,18 +205,15 @@ class Database:
         return row["timestamp"] if row else None
 
     def count_snacks_since(self, user_id: int, since_iso: str) -> int:
-        """Count entries with total_kcal < 300 from a given time onward."""
         row = self._conn.execute(
             "SELECT COUNT(*) AS cnt FROM entries WHERE user_id = ? AND timestamp >= ? AND total_kcal < 300",
             (user_id, since_iso),
         ).fetchone()
         return row["cnt"]
-        # Note: self._conn.commit() below is unreachable, kept for safety
 
     # ── Food reference ────────────────────────────────────────
 
     def import_foods(self, user_id: int, items: list[dict]) -> tuple[int, int]:
-        """Import multiple food references. Returns (added, updated)."""
         added = 0
         updated = 0
         now = datetime.now().isoformat()
@@ -222,14 +221,12 @@ class Database:
             name = item.get("name", "").strip().lower()
             if not name:
                 continue
-            # remove (оценочно) / (estimated) etc from name if LLM added it
             name = name.replace(" (оценочно)", "").replace(" (estimated)", "").strip()
             weight = float(item.get("weight_g", 100) or 100)
             kcal = float(item.get("kcal", 0))
             protein = float(item.get("protein_g", 0))
             fat = float(item.get("fat_g", 0))
             carbs = float(item.get("carbs_g", 0))
-            # normalise to per 100g
             factor = 100.0 / weight if weight > 0 else 1.0
             self._conn.execute(
                 """INSERT INTO food_reference
@@ -246,13 +243,11 @@ class Database:
                  round(carbs * factor, 1), now),
             )
             if self._conn.total_changes > 0:
-                # can't easily distinguish insert vs update without extra query
                 added += 1
         self._conn.commit()
         return added, updated
 
     def get_food_references(self, user_id: int) -> list[dict[str, Any]]:
-        """Return all references formatted for LLM context."""
         rows = self._conn.execute(
             "SELECT name, kcal_per_100, protein_per_100, fat_per_100, carbs_per_100 "
             "FROM food_reference WHERE user_id = ? ORDER BY name",
@@ -261,7 +256,6 @@ class Database:
         return [dict(r) for r in rows]
 
     def get_food_reference_text(self, user_id: int) -> str:
-        """Return references as text block for LLM prompt context."""
         refs = self.get_food_references(user_id)
         if not refs:
             return ""
@@ -283,7 +277,6 @@ class Database:
     def get_history_days(
         self, user_id: int, limit: int = 5, offset: int = 0
     ) -> list[dict]:
-        """Return distinct dates with daily totals, newest first."""
         rows = self._conn.execute(
             """SELECT date,
                      SUM(total_kcal)    AS kcal,
@@ -301,7 +294,6 @@ class Database:
         return [dict(r) for r in rows]
 
     def get_history_total_days(self, user_id: int) -> int:
-        """Count distinct days with entries."""
         row = self._conn.execute(
             "SELECT COUNT(DISTINCT date) AS cnt FROM entries WHERE user_id = ?",
             (user_id,),
@@ -309,7 +301,6 @@ class Database:
         return row["cnt"]
 
     def get_day_entries(self, user_id: int, date_str: str) -> list[dict]:
-        """Return all entries for a specific date."""
         rows = self._conn.execute(
             "SELECT * FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp",
             (user_id, date_str),

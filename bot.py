@@ -33,7 +33,6 @@ parser = LLMParser()
 
 
 async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Приветствие."""
     await update.message.reply_text(
         "🥗 Привет! Я CalorieBot.\n\n"
         "Просто пиши, что ты съел, а я посчитаю калории и БЖУ.\n\n"
@@ -45,9 +44,9 @@ async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /goal 1800 120 — установить цели (ккал, белок)\n"
         "• /recipe — разобрать рецепт и рассчитать КБЖУ блюда\n"
         "• /import — импортировать свои КБЖУ продуктов\n"
-        "• /save — сохранить продукты из последней записи в референсы\n"
+        "• /save — сохранить продукты в референсы\n"
         "• /today — итог за сегодня\n"
-        "• /undo [N] — отменить N последних записей (без N = 1)\n"
+        "• /undo [N] — отменить N последних записей\n"
         "• /reset — сбросить сегодняшние записи\n"
         "• /history — история дней с детализацией\n"
         "• /settings — настройки\n"
@@ -56,58 +55,39 @@ async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Подробная справка по командам."""
     await update.message.reply_text(
         "📖 CalorieBot — справка\n\n"
         "▸ /goal <ккал> <белок_г>\n"
-        "  Установить дневные цели. Пример: /goal 1800 120\n"
-        "  Без аргументов — показать текущие цели.\n\n"
-        "▸ /recipe <описание рецепта>\n"
-        "  Разобрать рецепт: ингредиенты с весом, итоговое КБЖУ, на 100г.\n"
-        "  Ингредиенты сохраняются как запись, новые продукты — в референсы.\n"
-        "  /save <имя> после рецепта переименовывает блюдо.\n"
-        "  Пример: /recipe Курица 930г (16г б, 145 ккал). Готовая смесь 589г\n\n"
-        "▸ /import <список продуктов>\n"
-        "  Импортировать свои КБЖУ в базу референсов.\n"
-        "  Пример: /import Гречка варёная — 100г: 110 ккал, 4г б, 2г ж, 23г у\n\n"
+        "  Установить дневные цели. Пример: /goal 1800 120\n\n"
+        "▸ /recipe <описание>\n"
+        "  Разобрать рецепт: ингредиенты, итоговое КБЖУ, на 100г.\n"
+        "  Ничего не сохраняется. Потом: /save <название блюда>\n\n"
+        "▸ /import <список>\n"
+        "  Импортировать свои КБЖУ в базу референсов.\n\n"
         "▸ /save [названия]\n"
-        "  Сохранить продукты из последней записи или рецепта в референсы.\n"
-        "  Без аргументов — все продукты. С аргументами — фильтр по имени.\n"
-        "  После /recipe: /save <имя> переименовывает блюдо.\n\n"
-        "▸ /today\n"
-        "  Показать итог за сегодня без добавления записи.\n\n"
-        "▸ /undo [N]\n"
-        "  Отменить N последних записей. /undo = 1, /undo 2 = 2 последние.\n\n"
-        "▸ /reset\n"
-        "  Удалить все записи за сегодня.\n\n"
-        "▸ /history\n"
-        "  История дней с пагинацией и детализацией.\n\n"
-        "▸ /settings\n"
-        "  Настройки: скрывать/показывать КБЖУ при записи еды.\n\n"
-        "💡 Как просто записать еду:\n"
-        "  Пиши что и сколько съел — бот сам разберёт.\n"
-        "  «куриная грудка 200г, гречка 150г, масло 10г»\n"
-        "  «миска 350г, вес 680г — суп» (бот вычтет тару)\n"
-        "  «яйцо 2шт» (оценит вес сам)\n\n"
-        "📌 Иконки:\n"
-        "  📌 = твои цифры, ✅ = из референсов, ⚡ = оценка ИИ"
+        "  После /recipe: /save <название> — сохраняет блюдо как референс.\n"
+        "  Иначе — сохранить продукты из последней записи.\n\n"
+        "▸ /today — итог за сегодня\n"
+        "▸ /undo [N] — отменить N последних записей\n"
+        "▸ /reset — удалить записи за сегодня\n"
+        "▸ /history — история дней\n"
+        "▸ /settings — скрывать/показывать КБЖУ при записи\n\n"
+        "💡 Пример: «куриная грудка 200г, гречка 150г»"
     )
 
 
 async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Главный обработчик: разобрать сообщение, сохранить, ответить итогом."""
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
     if not text:
         return
 
-    # ── 1. Парсинг через LLM с контекстом референсов ──
     ref_text = db.get_food_reference_text(user_id)
 
     try:
         items = await parser.parse(text, context=ref_text or None)
-    except Exception as e:
+    except Exception:
         logger.exception("LLM parse error")
         await update.message.reply_text("❌ Ошибка при разборе текста. Попробуй ещё раз или напиши проще.")
         return
@@ -116,16 +96,13 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("🤷 Не вижу еды в сообщении. Напиши, что и сколько съел. Если хочешь добавить свои данные по продуктам — используй /import")
         return
 
-    # ── 2. Суммируем ──
     total_kcal = sum(i['kcal'] for i in items)
     total_protein = sum(i['protein_g'] for i in items)
     total_fat = sum(i['fat_g'] for i in items)
     total_carbs = sum(i['carbs_g'] for i in items)
 
-    # ── 3. Сохраняем ──
     db.add_entry(user_id, items, total_kcal, total_protein, total_fat, total_carbs, text)
 
-    # ── 4. Ответ ──
     hide = db.get_hide_nutrients(user_id)
 
     if hide:
@@ -163,7 +140,6 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def today_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Показать итог за сегодня без добавления записи."""
     user_id = update.effective_user.id
     totals = db.get_today_totals(user_id)
     us = db.get_user_settings(user_id)
@@ -197,7 +173,6 @@ async def today_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def goal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Установить дневные цели: /goal 1800 120"""
     user_id = update.effective_user.id
     args = context.args
 
@@ -209,9 +184,7 @@ async def goal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 f"Чтобы изменить: /goal <ккал> <белок_г>"
             )
         else:
-            await update.message.reply_text(
-                "Цели не установлены. Пример: /goal 1800 120"
-            )
+            await update.message.reply_text("Цели не установлены. Пример: /goal 1800 120")
         return
 
     try:
@@ -226,7 +199,6 @@ async def goal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def reset_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Сбросить все записи за сегодня."""
     user_id = update.effective_user.id
     today = date.today().isoformat()
     import sqlite3
@@ -238,7 +210,6 @@ async def reset_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отменить N последних записей: /undo [N] (по умолч. 1)"""
     import sqlite3
     user_id = update.effective_user.id
     today = date.today().isoformat()
@@ -263,9 +234,7 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if n > len(rows):
         conn.close()
-        await update.message.reply_text(
-            f"🤷 У тебя всего {len(rows)} записей за сегодня. Нечего отменять."
-        )
+        await update.message.reply_text(f"🤷 У тебя всего {len(rows)} записей за сегодня. Нечего отменять.")
         return
 
     ids = [r["id"] for r in rows]
@@ -281,15 +250,36 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Сохранить продукты из последней записи в референсы: /save [названия через пробел]
+    """Сохранить продукты в референсы: /save [названия]
 
-    Без аргументов — сохраняет все продукты из последней записи.
-    С аргументами — сохраняет только те, что совпадают (по подстроке).
-    Если запись от /recipe и нет совпадений — переименовывает блюдо.
+    После /recipe: /save <название> — сохраняет блюдо как референс.
+    Иначе — сохраняет ингредиенты из последней записи.
     """
     import sqlite3
     user_id = update.effective_user.id
     today = date.today().isoformat()
+
+    # Try saving pending recipe first
+    pending = db.get_pending_recipe(user_id)
+    if pending and context.args:
+        new_name = " ".join(context.args).strip()
+        if new_name:
+            db.import_foods(user_id, [{
+                "name": new_name,
+                "weight_g": 100,
+                "kcal": pending.get("kcal_100", 0),
+                "protein_g": pending.get("protein_100", 0),
+                "fat_g": pending.get("fat_100", 0),
+                "carbs_g": pending.get("carbs_100", 0),
+            }])
+            db.set_pending_recipe(user_id, None)
+            await update.message.reply_text(
+                f"✅ Блюдо «{new_name}» сохранено! "
+                f"({pending['kcal_100']:.0f} ккал/100г, {pending['protein_100']:.1f}г б)"
+            )
+            return
+
+    # Fallback: save from last entry
     conn = sqlite3.connect(settings.db_path)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
@@ -313,46 +303,17 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 continue
         to_save.append(i)
 
-    if not to_save and filter_names:
-        # No ingredient matched — try renaming recipe reference
-        dish_name = db.get_last_recipe_dish(user_id)
-        if dish_name:
-            ref_conn = sqlite3.connect(settings.db_path)
-            ref = ref_conn.execute(
-                "SELECT * FROM food_reference WHERE user_id = ? AND name = ?",
-                (user_id, dish_name.lower()),
-            ).fetchone()
-            ref_conn.close()
-
-            if ref:
-                new_name = " ".join(filter_names)
-                upd_conn = sqlite3.connect(settings.db_path)
-                upd_conn.execute(
-                    "UPDATE food_reference SET name = ? WHERE user_id = ? AND name = ?",
-                    (new_name.lower(), user_id, dish_name.lower()),
-                )
-                upd_conn.commit()
-                upd_conn.close()
-                conn.close()
-                await update.message.reply_text(
-                    f"✏️ Блюдо «{dish_name}» переименовано в «{new_name}»!"
-                )
-                return
-
     if not to_save:
         conn.close()
         await update.message.reply_text("🤷 Ничего не найдено для сохранения." if filter_names else "🤷 Нет продуктов в последней записи.")
         return
 
-    added, updated = db.import_foods(user_id, to_save)
+    db.import_foods(user_id, to_save)
     conn.close()
 
     lines = [f"✅ Сохранено {len(to_save)} продуктов(а) в референсы:"]
     for i in to_save:
-        kcal = i['kcal']
-        wt = i['weight_g']
-        prot = i['protein_g']
-        lines.append(f"  • {i['name']}: {kcal:.0f} ккал, {prot:.1f}г б (на {wt:.0f}г)")
+        lines.append(f"  • {i['name']}: {i['kcal']:.0f} ккал, {i['protein_g']:.1f}г б (на {i['weight_g']:.0f}г)")
 
     await update.message.reply_text("\n".join(lines))
 
@@ -360,8 +321,8 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Разобрать рецепт и рассчитать КБЖУ готового блюда: /recipe <описание>
 
-    Пример:
-    /recipe Готовлю мясо мк2. Курица бедро 930г (16г б, 145 ккал). Гхи 5г. Лук 127г. Готовая смесь 589г
+    Ничего не сохраняет автоматически. После вызова /save <название>
+    создаёт референс из per_100g данных.
     """
     user_id = update.effective_user.id
     text = " ".join(context.args) if context.args else ""
@@ -396,7 +357,6 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     ingredients = result.get("ingredients", [])
     totals = result.get("totals", {})
     per_100g = result.get("per_100g", {})
-    new_refs = result.get("new_references", [])
 
     if not ingredients:
         await update.message.reply_text("🤷 Не смог разобрать рецепт.")
@@ -426,42 +386,23 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         lines.append(f"   На 100г: {per_100g.get('kcal', 0):.1f} ккал, "
                      f"{per_100g.get('protein_g', 0):.1f}г б")
 
-    # Auto-save new references + remember dish name for /save rename
-    if new_refs:
-        lines.append("")
-        lines.append("📌 Новые продукты для сохранения:")
-        for r in new_refs:
-            lines.append(f"  • {r['name']}: {r['kcal']:.0f} ккал, "
-                         f"{r['protein_g']:.1f}г б (на 100г)")
-        db.import_foods(user_id, new_refs)
-        lines.append("✅ Сохранено в референсы автоматически!")
-
-    db.set_last_recipe_dish(user_id, dish_name.lower())
-    if per_100g:
-        db.import_foods(user_id, [{
-            "name": dish_name,
-            "kcal": per_100g.get("kcal", 0),
-            "protein_g": per_100g.get("protein_g", 0),
-            "fat_g": per_100g.get("fat_g", 0),
-            "carbs_g": per_100g.get("carbs_g", 0),
-            "weight_g": 100,
-            "weight_type": "exact",
-            "source": "estimated",
-        }])
+    # Save recipe data temporarily — only saved when user runs /save <name>
+    db.set_pending_recipe(user_id, {
+        "dish_name": dish_name,
+        "kcal_100": per_100g.get("kcal", 0),
+        "protein_100": per_100g.get("protein_g", 0),
+        "fat_100": per_100g.get("fat_g", 0),
+        "carbs_100": per_100g.get("carbs_g", 0),
+        "ingredients": ingredients,
+    } if per_100g else None)
 
     lines.append("")
-    lines.append("💡 Сохранить ингредиент по имени: /save <название>")
+    lines.append("💡 Сохранить: /save <название блюда>")
 
     await update.message.reply_text("\n".join(lines))
 
 
 async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Импорт своих продуктов и их КБЖУ: /import <текст с продуктами>
-
-    Пример:
-    /import Гречка варёная — 100г: 110 ккал, 4г б, 2г ж, 23г у
-    Куриная грудка — 150г: 247 ккал, 46г б, 3г ж, 0г у
-    """
     user_id = update.effective_user.id
     text = " ".join(context.args) if context.args else ""
 
@@ -469,54 +410,37 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(
             "📝 Импорт продуктов\n\n"
             "Пришли список своих продуктов с КБЖУ в одном сообщении вместе с /import.\n\n"
-            "Формат — любой удобный, например:\n"
+            "Пример:\n"
             "/import Гречка варёная — 100г: 110 ккал, 4г б, 2г ж, 23г у\n"
             "Куриная грудка — 150г: 247 ккал, 46г б, 3.6г ж, 0г у\n"
-            "Оливковое масло — 15г: 134 ккал, 0г б, 15г ж, 0г у\n\n"
             "Можно просто скопировать свою выгрузку из чата."
         )
         return
 
     try:
         items = await parser.parse(text, system=IMPORT_SYSTEM_PROMPT, max_tokens=32000, timeout=120)
-    except json.JSONDecodeError as e:
-        logger.error("Import JSON error: %s", e)
-        await update.message.reply_text(
-            "❌ Ошибка: не смог разобрать ответ от ИИ. "
-            "Попробуй сократить список или разбить на части."
-        )
-        return
-    except httpx.TimeoutException:
-        logger.error("Import timeout")
-        await update.message.reply_text("❌ Таймаут при обращении к ИИ. Попробуй разбить список на части.")
+    except json.JSONDecodeError:
+        logger.error("Import JSON error")
+        await update.message.reply_text("❌ Ошибка: не смог разобрать ответ от ИИ. Попробуй сократить список.")
         return
     except Exception as e:
-        logger.exception("Import parse error: %s", e)
-        await update.message.reply_text(
-            f"❌ Ошибка при разборе списка продуктов: {e}. "
-            "Попробуй другой формат."
-        )
+        logger.exception("Import parse error")
+        await update.message.reply_text(f"❌ Ошибка при разборе: {e}. Попробуй другой формат.")
         return
 
     if not items:
         await update.message.reply_text("❌ Не смог распознать продукты. Попробуй в другом формате.")
         return
 
-    added, updated = db.import_foods(user_id, items)
+    db.import_foods(user_id, items)
 
     lines = [f"✅ Импортировано продуктов: {len(items)}"]
     for i in items:
-        name = i.get("name", "?")
-        kcal = i.get("kcal", 0)
-        prot = i.get("protein_g", 0)
-        fat = i.get("fat_g", 0)
-        carbs = i.get("carbs_g", 0)
-        wt = i.get("weight_g", 100)
-        lines.append(f"  • {name}: {kcal} ккал, {prot}г б, {fat}г ж, {carbs}г у (на {wt:.0f}г)")
+        lines.append(f"  • {i.get('name', '?')}: {i.get('kcal', 0)} ккал, "
+                     f"{i.get('protein_g', 0)}г б (на {i.get('weight_g', 100):.0f}г)")
 
     lines.append("")
-    lines.append("📌 Теперь, когда ты пишешь что съел, бот будет использовать ТВОИ цифры.")
-
+    lines.append("📌 Теперь бот будет использовать ТВОИ цифры.")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -564,10 +488,7 @@ async def history_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -
         lines.append(f"Цель: {us['daily_kcal']:.0f} ккал, {us['daily_protein']:.0f}г б")
     lines.append("")
 
-    await update.message.reply_text(
-        "\n".join(lines),
-        reply_markup=_build_history_keyboard(days, 0, total_pages),
-    )
+    await update.message.reply_text("\n".join(lines), reply_markup=_build_history_keyboard(days, 0, total_pages))
 
 
 async def history_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -595,10 +516,7 @@ async def history_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
             lines.append(f"Цель: {us['daily_kcal']:.0f} ккал, {us['daily_protein']:.0f}г б")
         lines.append("")
 
-        await query.edit_message_text(
-            "\n".join(lines),
-            reply_markup=_build_history_keyboard(days, page, total_pages),
-        )
+        await query.edit_message_text("\n".join(lines), reply_markup=_build_history_keyboard(days, page, total_pages))
 
     elif action == "day":
         date_str = parts[2]
@@ -629,10 +547,7 @@ async def history_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
             lines.append(f"   {e['total_kcal']:.0f} ккал, {e['total_protein']:.1f}г б")
 
         kb = [[InlineKeyboardButton("◀️ Назад к списку", callback_data="history:page:0")]]
-        await query.edit_message_text(
-            "\n".join(lines),
-            reply_markup=InlineKeyboardMarkup(kb),
-        )
+        await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
 
 # ── Settings ─────────────────────────────────────────────────
