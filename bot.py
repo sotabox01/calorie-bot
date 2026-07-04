@@ -1,12 +1,3 @@
-"""
-CalorieBot — Telegram бот для учёта калорий через OpenRouter LLM.
-
-Поток:
-1. Пользователь пишет, что съел → LLM парсит в структурированные данные
-2. Сохраняем в SQLite (за день)
-3. Отвечаем: что записано + итог дня + остаток до цели
-"""
-
 import json
 import logging
 from datetime import date
@@ -28,6 +19,47 @@ logger = logging.getLogger(__name__)
 db = Database()
 parser = LLMParser()
 
+# ── Helpers ─────────────────────────────────────────────────
+
+
+def recalc_ingredients_from_refs(user_id: int, ingredients: list[dict]) -> list[dict]:
+    """Server-side: recalc KJBJU for reference ingredients using DB values (per 100g)."""
+    import sqlite3
+    conn = sqlite3.connect(settings.db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT name, kcal_per_100, protein_per_100, fat_per_100, carbs_per_100 "
+        "FROM food_reference WHERE user_id = ?", (user_id,)
+    ).fetchall()
+    conn.close()
+
+    ref_map = {}
+    for r in rows:
+        ref_map[r["name"].strip().lower()] = dict(r)
+
+    result = []
+    for ing in ingredients:
+        if ing.get("source") == "reference":
+            ref = ref_map.get(ing.get("name", "").strip().lower())
+            if ref:
+                w = float(ing.get("weight_g", 0) or 0)
+                f = w / 100.0
+                ing["kcal"] = round(ref["kcal_per_100"] * f, 1)
+                ing["protein_g"] = round(ref["protein_per_100"] * f, 1)
+                ing["fat_g"] = round(ref["fat_per_100"] * f, 1)
+                ing["carbs_g"] = round(ref["carbs_per_100"] * f, 1)
+        result.append(ing)
+    return result
+
+
+def calc_totals(ingredients: list[dict]) -> dict:
+    return {
+        "kcal": sum(float(i.get("kcal", 0) or 0) for i in ingredients),
+        "protein_g": sum(float(i.get("protein_g", 0) or 0) for i in ingredients),
+        "fat_g": sum(float(i.get("fat_g", 0) or 0) for i in ingredients),
+        "carbs_g": sum(float(i.get("carbs_g", 0) or 0) for i in ingredients),
+    }
+
 
 # ── Хендлеры ────────────────────────────────────────────────
 
@@ -42,15 +74,15 @@ async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         "• «яйцо 2шт, хлеб 30г, масло 10г»\n\n"
         "Команды:\n"
         "• /goal 1800 120 — установить цели (ккал, белок)\n"
-        "• /recipe — разобрать рецепт и рассчитать КБЖУ блюда\n"
+        "• /recipe — разобрать рецепт, ничего не сохраняет\n"
         "• /import — импортировать свои КБЖУ продуктов\n"
-        "• /save — сохранить продукты в референсы\n"
+        "• /save — сохранить рецепт или продукты в референсы\n"
         "• /today — итог за сегодня\n"
         "• /undo [N] — отменить N последних записей\n"
         "• /reset — сбросить сегодняшние записи\n"
         "• /history — история дней с детализацией\n"
         "• /settings — настройки\n"
-        "• /help — подробная справка по командам"
+        "• /help — подробная справка"
     )
 
 
@@ -58,21 +90,21 @@ async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(
         "📖 CalorieBot — справка\n\n"
         "▸ /goal <ккал> <белок_г>\n"
-        "  Установить дневные цели. Пример: /goal 1800 120\n\n"
+        "  Установить дневные цели. /goal без аргументов — показать текущие.\n\n"
         "▸ /recipe <описание>\n"
-        "  Разобрать рецепт: ингредиенты, итоговое КБЖУ, на 100г.\n"
-        "  Ничего не сохраняется. Потом: /save <название блюда>\n\n"
+        "  Разобрать рецепт. Ничего не сохраняется автоматически.\n"
+        "  После /recipe используй /save <название> чтобы сохранить блюдо.\n\n"
         "▸ /import <список>\n"
-        "  Импортировать свои КБЖУ в базу референсов.\n\n"
+        "  Импортировать свои КБЖУ продуктов.\n\n"
         "▸ /save [названия]\n"
-        "  После /recipe: /save <название> — сохраняет блюдо как референс.\n"
-        "  Иначе — сохранить продукты из последней записи.\n\n"
+        "  Если последняя команда была /recipe — сохраняет блюдо как референс.\n"
+        "  Иначе — сохраняет продукты из последней записи еды.\n\n"
         "▸ /today — итог за сегодня\n"
         "▸ /undo [N] — отменить N последних записей\n"
         "▸ /reset — удалить записи за сегодня\n"
         "▸ /history — история дней\n"
         "▸ /settings — скрывать/показывать КБЖУ при записи\n\n"
-        "💡 Пример: «куриная грудка 200г, гречка 150г»"
+        "💡 Просто пиши что съел: «куриная грудка 200г, гречка 150г»"
     )
 
 
@@ -153,14 +185,8 @@ async def today_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     lines.append(f"Записей: {len(entries)}")
-    lines.append(
-        f"• Калории: {totals['kcal']:.0f}"
-        + (f" / {us['daily_kcal']:.0f} ккал" if us else " ккал")
-    )
-    lines.append(
-        f"• Белок: {totals['protein']:.1f}"
-        + (f" / {us['daily_protein']:.0f} г" if us else " г")
-    )
+    lines.append(f"• Калории: {totals['kcal']:.0f}" + (f" / {us['daily_kcal']:.0f} ккал" if us else " ккал"))
+    lines.append(f"• Белок: {totals['protein']:.1f}" + (f" / {us['daily_protein']:.0f} г" if us else " г"))
     lines.append(f"• Жиры: {totals['fat']:.1f} г")
     lines.append(f"• Углеводы: {totals['carbs']:.1f} г")
 
@@ -250,36 +276,39 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Сохранить продукты в референсы: /save [названия]
+    """Сохранить рецепт (pending_recipe) или продукты из последней записи.
 
     После /recipe: /save <название> — сохраняет блюдо как референс.
-    Иначе — сохраняет ингредиенты из последней записи.
+    Иначе — сохраняет продукты из последней записи еды.
     """
     import sqlite3
     user_id = update.effective_user.id
-    today = date.today().isoformat()
 
-    # Try saving pending recipe first
+    # Check if there's a pending recipe first
     pending = db.get_pending_recipe(user_id)
     if pending and context.args:
-        new_name = " ".join(context.args).strip()
-        if new_name:
-            db.import_foods(user_id, [{
-                "name": new_name,
-                "weight_g": 100,
-                "kcal": pending.get("kcal_100", 0),
-                "protein_g": pending.get("protein_100", 0),
-                "fat_g": pending.get("fat_100", 0),
-                "carbs_g": pending.get("carbs_100", 0),
-            }])
-            db.set_pending_recipe(user_id, None)
-            await update.message.reply_text(
-                f"✅ Блюдо «{new_name}» сохранено! "
-                f"({pending['kcal_100']:.0f} ккал/100г, {pending['protein_100']:.1f}г б)"
-            )
-            return
+        new_name = " ".join(context.args)
+        db.import_foods(user_id, [{
+            "name": new_name,
+            "weight_g": 100,
+            "kcal": pending["kcal_100"],
+            "protein_g": pending["protein_100"],
+            "fat_g": pending["fat_100"],
+            "carbs_g": pending["carbs_100"],
+        }])
+        db.set_pending_recipe(user_id, None)
+        await update.message.reply_text(
+            f"✅ Блюдо «{new_name}» сохранено! "
+            f"({pending['kcal_100']:.0f} ккал/100г, {pending['protein_100']:.1f}г б)"
+        )
+        return
 
-    # Fallback: save from last entry
+    if pending and not context.args:
+        await update.message.reply_text("📝 Напиши название после /save, например: /save грудка мк1")
+        return
+
+    # Fall back to saving from last entry
+    today = date.today().isoformat()
     conn = sqlite3.connect(settings.db_path)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
@@ -319,10 +348,10 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Разобрать рецепт и рассчитать КБЖУ готового блюда: /recipe <описание>
+    """Разобрать рецепт. Ничего не сохраняет.
 
-    Ничего не сохраняет автоматически. После вызова /save <название>
-    создаёт референс из per_100g данных.
+    Потом /save <название> сохраняет блюдо в референсы.
+    Все КБЖУ для reference-ингредиентов пересчитываются сервером из БД.
     """
     user_id = update.effective_user.id
     text = " ".join(context.args) if context.args else ""
@@ -355,12 +384,25 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     dish_name = result.get("dish_name", "Рецепт")
     ingredients = result.get("ingredients", [])
-    totals = result.get("totals", {})
     per_100g = result.get("per_100g", {})
 
     if not ingredients:
         await update.message.reply_text("🤷 Не смог разобрать рецепт.")
         return
+
+    # ── Server-side recalculation for reference ingredients ──
+    ingredients = recalc_ingredients_from_refs(user_id, ingredients)
+    totals = calc_totals(ingredients)
+
+    cw = float(result.get("cooked_weight_g", 0) or 0)
+    if cw > 0:
+        pf = 100.0 / cw
+        per_100g = {
+            "kcal": round(totals["kcal"] * pf, 1),
+            "protein_g": round(totals["protein_g"] * pf, 1),
+            "fat_g": round(totals["fat_g"] * pf, 1),
+            "carbs_g": round(totals["carbs_g"] * pf, 1),
+        }
 
     lines = [f"📋 {dish_name}"]
     lines.append("")
@@ -375,13 +417,12 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     lines.append("")
-    lines.append(f"📊 Итого: {totals.get('kcal', 0):.0f} ккал, "
-                 f"{totals.get('protein_g', 0):.1f}г б, "
-                 f"{totals.get('fat_g', 0):.1f}г ж, "
-                 f"{totals.get('carbs_g', 0):.1f}г у")
+    lines.append(f"📊 Итого: {totals['kcal']:.0f} ккал, "
+                 f"{totals['protein_g']:.1f}г б, "
+                 f"{totals['fat_g']:.1f}г ж, "
+                 f"{totals['carbs_g']:.1f}г у")
 
     if per_100g:
-        cw = result.get("cooked_weight_g", 0)
         lines.append(f"   Вес готового блюда: {cw:.0f}г" if cw else "")
         lines.append(f"   На 100г: {per_100g.get('kcal', 0):.1f} ккал, "
                      f"{per_100g.get('protein_g', 0):.1f}г б")
@@ -410,7 +451,7 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(
             "📝 Импорт продуктов\n\n"
             "Пришли список своих продуктов с КБЖУ в одном сообщении вместе с /import.\n\n"
-            "Пример:\n"
+            "Формат — любой удобный, например:\n"
             "/import Гречка варёная — 100г: 110 ккал, 4г б, 2г ж, 23г у\n"
             "Куриная грудка — 150г: 247 ккал, 46г б, 3.6г ж, 0г у\n"
             "Можно просто скопировать свою выгрузку из чата."
@@ -533,7 +574,7 @@ async def history_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
         total_carbs = sum(e["total_carbs"] for e in entries)
 
         lines = [header, ""]
-        lines.append(f"📊 Итого:")
+        lines.append("📊 Итого:")
         lines.append(f"  • Калории: {total_kcal:.0f}" + (f" / {us['daily_kcal']:.0f}" if us else ""))
         lines.append(f"  • Белок: {total_protein:.1f}" + (f" / {us['daily_protein']:.0f}" if us else ""))
         lines.append(f"  • Жиры: {total_fat:.1f} г")
