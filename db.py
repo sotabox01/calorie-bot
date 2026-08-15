@@ -107,7 +107,7 @@ class Database:
     def get_today_entries(self, user_id: int) -> list[dict[str, Any]]:
         today = date.today().isoformat()
         rows = self._conn.execute(
-            "SELECT * FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp",
+            "SELECT * FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp, id",
             (user_id, today),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -143,16 +143,6 @@ class Database:
                 daily_kcal    = excluded.daily_kcal,
                 daily_protein = excluded.daily_protein""",
             (user_id, kcal, protein),
-        )
-        self._conn.commit()
-
-    def set_remind_interval(self, user_id: int, hours: int) -> None:
-        self._conn.execute(
-            """INSERT INTO user_settings (user_id, remind_interval)
-               VALUES (?, ?)
-               ON CONFLICT(user_id) DO UPDATE SET
-                remind_interval = excluded.remind_interval""",
-            (user_id, hours),
         )
         self._conn.commit()
 
@@ -197,20 +187,6 @@ class Database:
         )
         self._conn.commit()
 
-    def get_last_entry_time(self, user_id: int) -> str | None:
-        row = self._conn.execute(
-            "SELECT timestamp FROM entries WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
-        return row["timestamp"] if row else None
-
-    def count_snacks_since(self, user_id: int, since_iso: str) -> int:
-        row = self._conn.execute(
-            "SELECT COUNT(*) AS cnt FROM entries WHERE user_id = ? AND timestamp >= ? AND total_kcal < 300",
-            (user_id, since_iso),
-        ).fetchone()
-        return row["cnt"]
-
     # ── Food reference ────────────────────────────────────────
 
     def import_foods(self, user_id: int, items: list[dict]) -> tuple[int, int]:
@@ -242,10 +218,61 @@ class Database:
                  round(protein * factor, 1), round(fat * factor, 1),
                  round(carbs * factor, 1), now),
             )
-            if self._conn.total_changes > 0:
-                added += 1
+            added += 1
         self._conn.commit()
         return added, updated
+
+    def delete_today_entries(self, user_id: int) -> None:
+        today = date.today().isoformat()
+        self._conn.execute(
+            "DELETE FROM entries WHERE user_id = ? AND date = ?", (user_id, today)
+        )
+        self._conn.commit()
+
+    def undo_last_entries(self, user_id: int, n: int) -> list[str] | None:
+        """Delete n most recent entries for today. Returns raw_texts, or None if fewer than n exist."""
+        today = date.today().isoformat()
+        rows = self._conn.execute(
+            "SELECT id, raw_text FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
+            (user_id, today, n),
+        ).fetchall()
+        if len(rows) < n:
+            return None
+        ids = [r["id"] for r in rows]
+        placeholders = ",".join("?" * len(ids))
+        self._conn.execute(f"DELETE FROM entries WHERE id IN ({placeholders})", ids)
+        self._conn.commit()
+        return [r["raw_text"] for r in rows]
+
+    def get_last_entry_items(self, user_id: int) -> list[dict] | None:
+        """Return items from the most recent entry today, or None."""
+        today = date.today().isoformat()
+        row = self._conn.execute(
+            "SELECT items_json FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp DESC, id DESC LIMIT 1",
+            (user_id, today),
+        ).fetchone()
+        return json.loads(row["items_json"]) if row else None
+
+    def recalc_ingredients_from_refs(self, user_id: int, ingredients: list[dict]) -> list[dict]:
+        """Recalculate KBJU for reference ingredients using DB values (per 100g)."""
+        rows = self._conn.execute(
+            "SELECT name, kcal_per_100, protein_per_100, fat_per_100, carbs_per_100 "
+            "FROM food_reference WHERE user_id = ?", (user_id,)
+        ).fetchall()
+        ref_map = {r["name"].strip().lower(): dict(r) for r in rows}
+        result = []
+        for ing in ingredients:
+            if ing.get("source") == "reference":
+                ref = ref_map.get(ing.get("name", "").strip().lower())
+                if ref:
+                    w = float(ing.get("weight_g", 0) or 0)
+                    f = w / 100.0
+                    ing["kcal"] = round(ref["kcal_per_100"] * f, 1)
+                    ing["protein_g"] = round(ref["protein_per_100"] * f, 1)
+                    ing["fat_g"] = round(ref["fat_per_100"] * f, 1)
+                    ing["carbs_g"] = round(ref["carbs_per_100"] * f, 1)
+            result.append(ing)
+        return result
 
     def get_food_references(self, user_id: int) -> list[dict[str, Any]]:
         rows = self._conn.execute(
@@ -302,7 +329,7 @@ class Database:
 
     def get_day_entries(self, user_id: int, date_str: str) -> list[dict]:
         rows = self._conn.execute(
-            "SELECT * FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp",
+            "SELECT * FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp, id",
             (user_id, date_str),
         ).fetchall()
         return [dict(r) for r in rows]

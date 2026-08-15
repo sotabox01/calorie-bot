@@ -22,35 +22,6 @@ parser = LLMParser()
 # ── Helpers ─────────────────────────────────────────────────
 
 
-def recalc_ingredients_from_refs(user_id: int, ingredients: list[dict]) -> list[dict]:
-    """Server-side: recalc KJBJU for reference ingredients using DB values (per 100g)."""
-    import sqlite3
-    conn = sqlite3.connect(settings.db_path)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT name, kcal_per_100, protein_per_100, fat_per_100, carbs_per_100 "
-        "FROM food_reference WHERE user_id = ?", (user_id,)
-    ).fetchall()
-    conn.close()
-
-    ref_map = {}
-    for r in rows:
-        ref_map[r["name"].strip().lower()] = dict(r)
-
-    result = []
-    for ing in ingredients:
-        if ing.get("source") == "reference":
-            ref = ref_map.get(ing.get("name", "").strip().lower())
-            if ref:
-                w = float(ing.get("weight_g", 0) or 0)
-                f = w / 100.0
-                ing["kcal"] = round(ref["kcal_per_100"] * f, 1)
-                ing["protein_g"] = round(ref["protein_per_100"] * f, 1)
-                ing["fat_g"] = round(ref["fat_per_100"] * f, 1)
-                ing["carbs_g"] = round(ref["carbs_per_100"] * f, 1)
-        result.append(ing)
-    return result
-
 
 def calc_totals(ingredients: list[dict]) -> dict:
     return {
@@ -226,19 +197,12 @@ async def goal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def reset_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    today = date.today().isoformat()
-    import sqlite3
-    conn = sqlite3.connect(settings.db_path)
-    conn.execute("DELETE FROM entries WHERE user_id = ? AND date = ?", (user_id, today))
-    conn.commit()
-    conn.close()
+    db.delete_today_entries(user_id)
     await update.message.reply_text("🗑 Записи за сегодня удалены.")
 
 
 async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    import sqlite3
     user_id = update.effective_user.id
-    today = date.today().isoformat()
 
     n = 1
     if context.args:
@@ -251,26 +215,14 @@ async def undo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text("🔢 Напиши число. Пример: /undo 2")
             return
 
-    conn = sqlite3.connect(settings.db_path)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id, raw_text FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp DESC LIMIT ?",
-        (user_id, today, n),
-    ).fetchall()
-
-    if n > len(rows):
-        conn.close()
-        await update.message.reply_text(f"🤷 У тебя всего {len(rows)} записей за сегодня. Нечего отменять.")
+    deleted = db.undo_last_entries(user_id, n)
+    if deleted is None:
+        today_count = len(db.get_today_entries(user_id))
+        await update.message.reply_text(f"🤷 У тебя всего {today_count} записей за сегодня. Нечего отменять.")
         return
 
-    ids = [r["id"] for r in rows]
-    placeholders = ",".join("?" * len(ids))
-    conn.execute(f"DELETE FROM entries WHERE id IN ({placeholders})", ids)
-    conn.commit()
-    conn.close()
-
     if n == 1:
-        await update.message.reply_text(f"🗑 Отменено: «{rows[0]['raw_text'][:60]}…»")
+        await update.message.reply_text(f"🗑 Отменено: «{deleted[0][:60]}…»")
     else:
         await update.message.reply_text(f"🗑 Отменено {n} записей.")
 
@@ -281,7 +233,6 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     После /recipe: /save <название> — сохраняет блюдо как референс.
     Иначе — сохраняет продукты из последней записи еды.
     """
-    import sqlite3
     user_id = update.effective_user.id
 
     # Check if there's a pending recipe first
@@ -308,20 +259,12 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     # Fall back to saving from last entry
-    today = date.today().isoformat()
-    conn = sqlite3.connect(settings.db_path)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT items_json FROM entries WHERE user_id = ? AND date = ? ORDER BY timestamp DESC LIMIT 1",
-        (user_id, today),
-    ).fetchone()
+    items = db.get_last_entry_items(user_id)
 
-    if not row:
-        conn.close()
+    if not items:
         await update.message.reply_text("🤷 Нет записей за сегодня. Сначала напиши, что съел, или используй /recipe.")
         return
 
-    items = json.loads(row["items_json"])
     filter_names = [a.lower() for a in context.args] if context.args else []
 
     to_save = []
@@ -333,12 +276,10 @@ async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         to_save.append(i)
 
     if not to_save:
-        conn.close()
         await update.message.reply_text("🤷 Ничего не найдено для сохранения." if filter_names else "🤷 Нет продуктов в последней записи.")
         return
 
     db.import_foods(user_id, to_save)
-    conn.close()
 
     lines = [f"✅ Сохранено {len(to_save)} продуктов(а) в референсы:"]
     for i in to_save:
@@ -391,7 +332,7 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # ── Server-side recalculation for reference ingredients ──
-    ingredients = recalc_ingredients_from_refs(user_id, ingredients)
+    ingredients = db.recalc_ingredients_from_refs(user_id, ingredients)
     totals = calc_totals(ingredients)
 
     cw = float(result.get("cooked_weight_g", 0) or 0)

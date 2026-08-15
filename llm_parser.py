@@ -159,7 +159,7 @@ class LLMParser:
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
-                    "HTTP-Referer": "https://github.com/nousresearch/hermes",
+                    "HTTP-Referer": "https://github.com/calorie-bot",
                 },
                 json={
                     "model": self.model,
