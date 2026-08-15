@@ -19,10 +19,9 @@ scp -P 25565 bot.py db.py radeonovich@144.31.164.138:~/calorie-bot/
 
 # Restart the bot
 ssh caloriebot-vps "
-  cd ~/calorie-bot &&
-  screen -S caloriebot -X quit &&
+  screen -S caloriebot -X quit 2>/dev/null;
   sleep 3 &&
-  screen -dmS caloriebot ~/calorie-bot/venv/bin/python ~/calorie-bot/bot.py &&
+  screen -dmS caloriebot bash -c 'cd ~/calorie-bot && exec ~/calorie-bot/venv/bin/python bot.py' &&
   sleep 2 &&
   screen -ls"
 
