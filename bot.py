@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 
 from config import settings
 from db import Database
-from llm_parser import LLMParser, IMPORT_SYSTEM_PROMPT
+from llm_parser import LLMParser, IMPORT_SYSTEM_PROMPT, RateLimitError
 from recipe_prompt import RECIPE_SYSTEM_PROMPT
 
 logging.basicConfig(
@@ -90,6 +90,9 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
 
     try:
         items = await parser.parse(text, context=ref_text or None)
+    except RateLimitError:
+        await update.message.reply_text("⏳ Превышен лимит запросов к ИИ. Подожди минуту и попробуй снова.")
+        return
     except Exception:
         logger.exception("LLM parse error")
         await update.message.reply_text("❌ Ошибка при разборе текста. Попробуй ещё раз или напиши проще.")
@@ -318,6 +321,9 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             timeout=60,
             raw=True,
         )
+    except RateLimitError:
+        await update.message.reply_text("⏳ Превышен лимит запросов к ИИ. Подожди минуту и попробуй снова.")
+        return
     except Exception as e:
         logger.exception("Recipe parse error")
         await update.message.reply_text(f"❌ Ошибка при разборе рецепта: {e}")
@@ -401,6 +407,9 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     try:
         items = await parser.parse(text, system=IMPORT_SYSTEM_PROMPT, max_tokens=32000, timeout=120)
+    except RateLimitError:
+        await update.message.reply_text("⏳ Превышен лимит запросов к ИИ. Подожди минуту и попробуй снова.")
+        return
     except json.JSONDecodeError:
         logger.error("Import JSON error")
         await update.message.reply_text("❌ Ошибка: не смог разобрать ответ от ИИ. Попробуй сократить список.")

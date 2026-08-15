@@ -8,6 +8,10 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+
+class RateLimitError(Exception):
+    """OpenRouter вернул 429 — превышен лимит запросов."""
+
 SYSTEM_PROMPT = """Ты — помощник для подсчёта калорий. Пользователь описывает, что он съел, на русском языке.
 
 Твоя задача — извлечь из текста все продукты и их количество, и оценить их калорийность и БЖУ (белки, жиры, углеводы).
@@ -175,7 +179,12 @@ class LLMParser:
                         "response_format": {"type": "json_object"},
                     },
                 )
-                resp.raise_for_status()
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 429:
+                        raise RateLimitError() from e
+                    raise
                 data = resp.json()
                 content = data["choices"][0]["message"]["content"]
 
