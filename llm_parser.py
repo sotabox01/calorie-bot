@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 
@@ -140,41 +141,55 @@ class LLMParser:
         logger.info("Parsing: %s", text[:80])
 
         sys_prompt = system if system else SYSTEM_PROMPT
-        messages = [{"role": "system", "content": sys_prompt}]
-        if context:
-            messages.append({
-                "role": "system",
-                "content": (
-                    "НИЖЕ — проверенные данные пользователя о его продуктах.\n"
-                    "Используй их В ПЕРВУЮ ОЧЕРЕДЬ. Если продукт есть в этом списке, "
-                    "всегда бери КБЖУ оттуда, а не из общих таблиц.\n\n"
-                    f"{context}"
-                ),
-            })
-        messages.append({"role": "user", "content": text})
+        result: dict = {}
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://github.com/calorie-bot",
-                },
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": 0.1,
-                    "max_tokens": max_tokens,
-                    "response_format": {"type": "json_object"},
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"]
+        for attempt in range(2):
+            # On retry add zero-width space to bypass OpenRouter cache for the same input
+            query = text if attempt == 0 else text + "\u200b"
+            messages = [{"role": "system", "content": sys_prompt}]
+            if context:
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "НИЖЕ — проверенные данные пользователя о его продуктах.\n"
+                        "Используй их В ПЕРВУЮ ОЧЕРЕДЬ. Если продукт есть в этом списке, "
+                        "всегда бери КБЖУ оттуда, а не из общих таблиц.\n\n"
+                        f"{context}"
+                    ),
+                })
+            messages.append({"role": "user", "content": query})
 
-        json_str = _extract_json(content)
-        result = json.loads(json_str)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://github.com/calorie-bot",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "temperature": 0.1,
+                        "max_tokens": max_tokens,
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+
+            try:
+                json_str = _extract_json(content)
+                result = json.loads(json_str)
+                break
+            except (json.JSONDecodeError, KeyError, IndexError) as e:
+                if attempt == 0:
+                    logger.warning("LLM parse failed, retrying. Raw: %.200s | Error: %s", content, e)
+                    await asyncio.sleep(1)
+                    continue
+                logger.error("LLM parse failed on retry. Raw: %.200s", content)
+                raise
 
         if raw:
             return result
