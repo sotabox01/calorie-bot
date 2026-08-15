@@ -163,3 +163,63 @@ class TestSaveCommand:
 
         mock_db.import_foods.assert_not_called()
         update.message.reply_text.assert_awaited_once()
+
+
+class TestGoalNotification:
+    async def test_notification_sent_when_kcal_goal_crossed(self):
+        from bot import handle_message
+        mock_db = MagicMock()
+        mock_parser = MagicMock()
+        mock_parser.parse = AsyncMock(return_value=[{
+            "name": "еда", "weight_g": 100, "weight_type": "exact",
+            "kcal": 500, "protein_g": 30, "fat_g": 10, "carbs_g": 20,
+        }])
+        # prev totals: 1400 kcal (below goal 1800)
+        # new totals: 1900 kcal (above goal 1800)
+        mock_db.get_food_reference_text.return_value = ""
+        mock_db.get_hide_nutrients.return_value = False
+        mock_db.get_today_totals.side_effect = [
+            {"kcal": 1400.0, "protein": 80.0, "fat": 40.0, "carbs": 100.0},  # prev
+            {"kcal": 1900.0, "protein": 110.0, "fat": 50.0, "carbs": 120.0}, # after
+        ]
+        mock_db.get_user_settings.return_value = {
+            "daily_kcal": 1800.0, "daily_protein": 120.0,
+            "daily_fat": 60.0, "daily_carbs": 200.0,
+        }
+        mock_db.get_notify_goals.return_value = True
+
+        update = make_update()
+
+        with patch("bot.db", mock_db), patch("bot.parser", mock_parser):
+            await handle_message(update, make_ctx())
+
+        msg = update.message.reply_text.call_args[0][0]
+        assert "Цель по калориям достигнута" in msg
+
+    async def test_no_notification_when_notify_disabled(self):
+        from bot import handle_message
+        mock_db = MagicMock()
+        mock_parser = MagicMock()
+        mock_parser.parse = AsyncMock(return_value=[{
+            "name": "еда", "weight_g": 100, "weight_type": "exact",
+            "kcal": 500, "protein_g": 30, "fat_g": 10, "carbs_g": 20,
+        }])
+        mock_db.get_food_reference_text.return_value = ""
+        mock_db.get_hide_nutrients.return_value = False
+        mock_db.get_today_totals.side_effect = [
+            {"kcal": 1400.0, "protein": 80.0, "fat": 40.0, "carbs": 100.0},
+            {"kcal": 1900.0, "protein": 110.0, "fat": 50.0, "carbs": 120.0},
+        ]
+        mock_db.get_user_settings.return_value = {
+            "daily_kcal": 1800.0, "daily_protein": 120.0,
+            "daily_fat": 60.0, "daily_carbs": 200.0,
+        }
+        mock_db.get_notify_goals.return_value = False  # disabled
+
+        update = make_update()
+
+        with patch("bot.db", mock_db), patch("bot.parser", mock_parser):
+            await handle_message(update, make_ctx())
+
+        msg = update.message.reply_text.call_args[0][0]
+        assert "Цель" not in msg

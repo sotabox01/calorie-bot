@@ -64,6 +64,7 @@ class Database:
         for table, col, col_type in [
             ("user_settings", "hide_nutrients", "INTEGER DEFAULT 0"),
             ("user_settings", "pending_recipe", "TEXT DEFAULT NULL"),
+            ("user_settings", "notify_goals", "INTEGER DEFAULT 0"),
         ]:
             try:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
@@ -159,6 +160,23 @@ class Database:
                VALUES (?, ?)
                ON CONFLICT(user_id) DO UPDATE SET
                 hide_nutrients = excluded.hide_nutrients""",
+            (user_id, int(value)),
+        )
+        self._conn.commit()
+
+    def get_notify_goals(self, user_id: int) -> bool:
+        row = self._conn.execute(
+            "SELECT notify_goals FROM user_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return bool(row["notify_goals"]) if row else False
+
+    def set_notify_goals(self, user_id: int, value: bool) -> None:
+        self._conn.execute(
+            """INSERT INTO user_settings (user_id, notify_goals)
+               VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                notify_goals = excluded.notify_goals""",
             (user_id, int(value)),
         )
         self._conn.commit()

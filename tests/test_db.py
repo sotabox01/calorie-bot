@@ -212,6 +212,15 @@ class TestUserSettings:
         db.set_hide_nutrients(USER_ID, False)
         assert db.get_hide_nutrients(USER_ID) is False
 
+    def test_notify_goals_default_false(self, db):
+        assert db.get_notify_goals(USER_ID) is False
+
+    def test_set_notify_goals_toggle(self, db):
+        db.set_notify_goals(USER_ID, True)
+        assert db.get_notify_goals(USER_ID) is True
+        db.set_notify_goals(USER_ID, False)
+        assert db.get_notify_goals(USER_ID) is False
+
 
 class TestPendingRecipe:
     def test_set_and_get(self, db):

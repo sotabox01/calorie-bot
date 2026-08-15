@@ -49,6 +49,7 @@ async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /import — импортировать свои КБЖУ продуктов\n"
         "• /save — сохранить рецепт или продукты в референсы\n"
         "• /today — итог за сегодня\n"
+        "• /protein — белок за сегодня\n"
         "• /undo [N] — отменить N последних записей\n"
         "• /reset — сбросить сегодняшние записи\n"
         "• /history — история дней с детализацией\n"
@@ -107,6 +108,7 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
     total_fat = sum(i['fat_g'] for i in items)
     total_carbs = sum(i['carbs_g'] for i in items)
 
+    prev_totals = db.get_today_totals(user_id)
     db.add_entry(user_id, items, total_kcal, total_protein, total_fat, total_carbs, text)
 
     hide = db.get_hide_nutrients(user_id)
@@ -139,6 +141,12 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
         rem_kcal = us['daily_kcal'] - today_totals['kcal']
         rem_prot = us['daily_protein'] - today_totals['protein']
         lines.append(f"📌 Осталось: {rem_kcal:.0f} ккал, {rem_prot:.1f}г белка")
+
+        if db.get_notify_goals(user_id):
+            if prev_totals['kcal'] < us['daily_kcal'] <= today_totals['kcal']:
+                lines.append(f"🎯 Цель по калориям достигнута: {today_totals['kcal']:.0f}/{us['daily_kcal']:.0f} ккал")
+            if prev_totals['protein'] < us['daily_protein'] <= today_totals['protein']:
+                lines.append(f"🎯 Цель по белку достигнута: {today_totals['protein']:.1f}/{us['daily_protein']:.0f} г")
     else:
         lines.append(f"💡 Установи цели: /goal 1800 120")
 
@@ -547,20 +555,25 @@ async def history_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
 async def settings_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     hidden = db.get_hide_nutrients(user_id)
+    notify = db.get_notify_goals(user_id)
 
-    status = "✅ Скрыты" if hidden else "❌ Показаны"
     lines = [
         "⚙️ Настройки",
         "",
-        "При внесении записи о еде:",
-        f"  {status} — калории и белок",
-        "",
-        "Если скрыты, в ответе будет только название продукта.",
-        "Итоги дня — в /today.",
+        f"  {'✅' if hidden else '❌'} Скрывать КБЖУ при записи",
+        f"  {'🔔' if notify else '🔕'} Уведомлять при достижении цели",
     ]
 
-    btn_label = "🙈 Скрывать КБЖУ" if not hidden else "👀 Показывать КБЖУ"
-    kb = [[InlineKeyboardButton(btn_label, callback_data="settings:toggle")]]
+    kb = [
+        [InlineKeyboardButton(
+            "👀 Показывать КБЖУ" if hidden else "🙈 Скрывать КБЖУ",
+            callback_data="settings:toggle_hide",
+        )],
+        [InlineKeyboardButton(
+            "🔕 Выкл уведомления" if notify else "🔔 Вкл уведомления",
+            callback_data="settings:toggle_notify",
+        )],
+    ]
     await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
 
@@ -569,35 +582,80 @@ async def settings_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     user_id = update.effective_user.id
 
-    if query.data == "settings:toggle":
-        current = db.get_hide_nutrients(user_id)
-        db.set_hide_nutrients(user_id, not current)
+    if query.data == "settings:toggle_hide":
+        db.set_hide_nutrients(user_id, not db.get_hide_nutrients(user_id))
+    elif query.data == "settings:toggle_notify":
+        db.set_notify_goals(user_id, not db.get_notify_goals(user_id))
+    elif query.data == "settings:toggle":  # legacy callback
+        db.set_hide_nutrients(user_id, not db.get_hide_nutrients(user_id))
 
-        hidden = not current
-        status = "✅ Скрыты" if hidden else "❌ Показаны"
-        lines = [
-            "⚙️ Настройки",
-            "",
-            "При внесении записи о еде:",
-            f"  {status} — калории и белок",
-            "",
-            "Если скрыты, в ответе будет только название продукта.",
-            "Итоги дня — в /today.",
-        ]
-        btn_label = "🙈 Скрывать КБЖУ" if not hidden else "👀 Показывать КБЖУ"
-        kb = [[InlineKeyboardButton(btn_label, callback_data="settings:toggle")]]
-        await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
+    hidden = db.get_hide_nutrients(user_id)
+    notify = db.get_notify_goals(user_id)
+
+    lines = [
+        "⚙️ Настройки",
+        "",
+        f"  {'✅' if hidden else '❌'} Скрывать КБЖУ при записи",
+        f"  {'🔔' if notify else '🔕'} Уведомлять при достижении цели",
+    ]
+    kb = [
+        [InlineKeyboardButton(
+            "👀 Показывать КБЖУ" if hidden else "🙈 Скрывать КБЖУ",
+            callback_data="settings:toggle_hide",
+        )],
+        [InlineKeyboardButton(
+            "🔕 Выкл уведомления" if notify else "🔔 Вкл уведомления",
+            callback_data="settings:toggle_notify",
+        )],
+    ]
+    await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
 
 USER_FILTER = filters.User(user_id=settings.owner_id)
 
 
+async def protein_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    totals = db.get_today_totals(user_id)
+    us = db.get_user_settings(user_id)
+    protein = totals['protein']
+    if us:
+        goal = us['daily_protein']
+        pct = protein / goal * 100 if goal else 0
+        bar = "▓" * int(pct / 10) + "░" * (10 - int(pct / 10))
+        await update.message.reply_text(
+            f"🥩 Белок сегодня: {protein:.1f} / {goal:.0f} г ({pct:.0f}%)\n{bar}"
+        )
+    else:
+        await update.message.reply_text(
+            f"🥩 Белок сегодня: {protein:.1f} г\n\n💡 Установи цель: /goal 1800 120"
+        )
+
+
+async def post_init(application) -> None:
+    from telegram import BotCommand
+    await application.bot.set_my_commands([
+        BotCommand("today",   "Итог за сегодня"),
+        BotCommand("protein", "Белок за сегодня"),
+        BotCommand("goal",    "Установить цели (ккал, белок)"),
+        BotCommand("history", "История дней"),
+        BotCommand("recipe",  "Разобрать рецепт"),
+        BotCommand("save",    "Сохранить в референсы"),
+        BotCommand("import",  "Импорт своих КБЖУ"),
+        BotCommand("undo",    "Отменить последние записи"),
+        BotCommand("reset",   "Сбросить записи за сегодня"),
+        BotCommand("settings","Настройки"),
+        BotCommand("help",    "Справка"),
+    ])
+
+
 def main() -> None:
-    app = Application.builder().token(settings.bot_token).build()
+    app = Application.builder().token(settings.bot_token).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start, USER_FILTER))
     app.add_handler(CommandHandler("goal", goal_command, USER_FILTER))
     app.add_handler(CommandHandler("today", today_command, USER_FILTER))
+    app.add_handler(CommandHandler("protein", protein_command, USER_FILTER))
     app.add_handler(CommandHandler("reset", reset_command, USER_FILTER))
     app.add_handler(CommandHandler("import", import_command, USER_FILTER))
     app.add_handler(CommandHandler("undo", undo_command, USER_FILTER))
